@@ -2,8 +2,11 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'InstaClean • Bulk Unlike & Delete Comments',
-  description: 'Clean your digital footprint by mass unliking Instagram posts and deleting old comments safely.',
+  title: 'InstaClean • Bulk Unlike Instagram Posts & Reels',
+  description: 'Clean your digital footprint by mass unliking Instagram posts and reels safely with zero data collection.',
+  icons: {
+    icon: '/logo.png',
+  },
 };
 
 export default function RootLayout({

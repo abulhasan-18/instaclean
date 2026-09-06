@@ -317,11 +317,11 @@ export default function Dashboard() {
       <header className="border-b border-gray-800/80 bg-[#0c0e14]/80 backdrop-blur sticky top-0 z-50 px-6 py-3.5">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center space-x-3">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-instagram-yellow via-instagram-pink to-instagram-purple p-[2px]">
-              <div className="w-full h-full bg-[#0c0e14] rounded-[10px] flex items-center justify-center">
-                <Sparkles className="w-4 h-4 text-pink-400" />
-              </div>
-            </div>
+            <img
+              src="/logo.png"
+              alt="InstaClean Logo"
+              className="w-10 h-10 rounded-xl object-cover shadow-lg border border-pink-500/20"
+            />
             <div>
               <h1 className="font-bold text-base tracking-wide flex items-center gap-2">
                 InstaClean
