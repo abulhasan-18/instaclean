@@ -5,135 +5,54 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 YELLOW='\033[1;33m'
-MAGENTA='\033[0;35m'
 CYAN='\033[0;36m'
+BOLD='\033[1m'
 NC='\033[0m'
 
-# Detect OS
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    OS="macOS"
-elif [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "win32" ]]; then
-    OS="Windows"
-else
-    OS="Linux"
-fi
+clear
 
-# Function to check for root/sudo
-check_root() {
-    if [ "$OS" != "Windows" ] && [ "$EUID" -ne 0 ]; then
-        echo -e "${RED}[!] Error: This script requires root privileges${NC}"
-        echo -e "${YELLOW}[i] Please run with sudo${NC}"
-        exit 1
-    fi
-}
+echo -e "${CYAN}${BOLD}"
+echo "╔══════════════════════════════════════════════════════════╗"
+echo "║          Instagram Mass Unlike Tool Launcher             ║"
+echo "║              Web Dashboard & Python CLI                  ║"
+echo "╚══════════════════════════════════════════════════════════╝"
+echo -e "${NC}"
 
-# Function to install package manager
-install_package_manager() {
-    if [ "$OS" = "macOS" ]; then
-        if ! command -v brew &> /dev/null; then
-            echo -e "${YELLOW}[+] Installing Homebrew...${NC}"
-            /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || {
-                echo -e "${RED}[!] Failed to install Homebrew${NC}"
-                exit 1
-            }
-        fi
-    elif [ "$OS" = "Linux" ]; then
-        if ! command -v apt-get &> /dev/null && ! command -v dnf &> /dev/null; then
-            echo -e "${RED}[!] No supported package manager found${NC}"
-            exit 1
-        fi
-    fi
-}
-
-# Function to install a package
-install_package() {
-    local package=$1
-    echo -e "${BLUE}[*] Checking $package installation...${NC}"
-    
-    if ! command -v $package &> /dev/null; then
-        echo -e "${YELLOW}[+] Installing $package...${NC}"
-        if [ "$OS" = "macOS" ]; then
-            brew install $package || return 1
-        elif [ "$OS" = "Linux" ]; then
-            if command -v apt-get &> /dev/null; then
-                apt-get update && apt-get install -y $package || return 1
-            elif command -v dnf &> /dev/null; then
-                dnf install -y $package || return 1
-            fi
-        fi
-    fi
-    echo -e "${GREEN}[✓] $package check passed${NC}"
-    return 0
-}
-
-# Header
-echo -e "${BLUE}[*]=======================================${NC}"
-echo -e "${YELLOW}[+] Instagram Mass Unliker - Setup Utility${NC}"
-echo -e "${BLUE}[*]=======================================${NC}"
+echo -e "${BOLD}Select how you want to run the tool:${NC}"
+echo -e "  ${GREEN}1)${NC} ${BOLD}Launch Web Dashboard${NC} (Next.js - http://localhost:3001)"
+echo -e "  ${BLUE}2)${NC} ${BOLD}Run Python CLI Tool${NC} (Terminal Interactive Menu)"
+echo -e "  ${YELLOW}3)${NC} Install / Update Dependencies"
+echo -e "  ${RED}0)${NC} Exit"
 echo
 
-# Check root privileges
-check_root
+read -p "Enter your choice [1-3, 0]: " choice
 
-# Install package manager
-install_package_manager
-
-# Install required packages
-for package in git python3 python3-pip ffmpeg; do
-    install_package $package || {
-        echo -e "${RED}[!] Failed to install $package${NC}"
+case $choice in
+    1)
+        echo
+        echo -e "${GREEN}[*] Starting Next.js Web Dashboard...${NC}"
+        echo -e "${YELLOW}Open your browser at: ${CYAN}http://localhost:3001${NC}"
+        echo -e "${YELLOW}Press Ctrl+C anytime to stop the server.${NC}"
+        echo
+        npx next dev -p 3001
+        ;;
+    2)
+        echo
+        echo -e "${BLUE}[*] Launching Python CLI Tool...${NC}"
+        python3 instagram_tool.py
+        ;;
+    3)
+        echo
+        echo -e "${YELLOW}[*] Checking & Installing dependencies...${NC}"
+        npm install
+        echo -e "${GREEN}[✓] Setup completed! Run ./run.sh again to start.${NC}"
+        ;;
+    0)
+        echo -e "${GREEN}Goodbye!${NC}"
+        exit 0
+        ;;
+    *)
+        echo -e "${RED}[!] Invalid choice. Exiting.${NC}"
         exit 1
-    }
-done
-
-# Check Python version
-echo -e "${BLUE}[*] Checking Python version...${NC}"
-python3 -c "import sys; sys.exit(0 if sys.version_info >= (3,7) else 1)" || {
-    echo -e "${RED}[!] Error: Python 3.7 or higher required${NC}"
-    exit 1
-}
-echo -e "${GREEN}[✓] Python version check passed${NC}"
-
-# Set up virtual environment
-echo -e "${BLUE}[*] Setting up virtual environment...${NC}"
-if [ ! -d "venv" ]; then
-    python3 -m venv venv || {
-        echo -e "${RED}[!] Failed to create virtual environment${NC}"
-        exit 1
-    }
-fi
-
-# Activate virtual environment
-if [ "$OS" = "Windows" ]; then
-    source venv/Scripts/activate
-else
-    source venv/bin/activate
-fi
-
-if [ $? -ne 0 ]; then
-    echo -e "${RED}[!] Failed to activate virtual environment${NC}"
-    exit 1
-fi
-
-# Install Python dependencies
-echo -e "${BLUE}[*] Installing Python dependencies...${NC}"
-python -m pip install --upgrade pip
-pip install ensta==5.2.9 tqdm==4.67.1 colorama==0.4.6 requests==2.32.3 || {
-    echo -e "${RED}[!] Failed to install Python dependencies${NC}"
-    exit 1
-}
-
-echo -e "${GREEN}[✓] Virtual environment setup complete${NC}"
-
-# Run the main script
-echo -e "${BLUE}[*] Starting Instagram Mass Unliker...${NC}"
-python instagram_unliker.py
-if [ $? -ne 0 ]; then
-    echo -e "${RED}[!] Program exited with errors${NC}"
-    exit 1
-fi
-
-# Deactivate virtual environment
-deactivate
-
-echo -e "${GREEN}[✓] Program completed successfully${NC}"
+        ;;
+esac
