@@ -18,7 +18,7 @@ import {
   Info,
   Trash2
 } from 'lucide-react';
-import { LikedPostItem } from '@/lib/instagram';
+import { LikedPostItem, instagramCodeToMediaId } from '@/lib/instagram';
 
 type Tab = 'unlike' | 'account' | 'settings' | 'logs';
 
@@ -157,32 +157,102 @@ export default function Dashboard() {
     }
   };
 
-  // Parse Liked Posts File
-  const handleLikesFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Parse Liked Posts File (100% Client-Side: instantaneous, no file size limits)
+  const handleLikesFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setLikesFileName(file.name);
     addLog('info', `Reading file: ${file.name}...`);
 
     const reader = new FileReader();
-    reader.onload = async (event) => {
-      const text = event.target?.result as string;
+    reader.onerror = () => {
+      addLog('error', `Failed to read file: ${file.name}`);
+    };
+    reader.onload = (event) => {
       try {
-        const res = await fetch('/api/parse', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ rawJson: text, type: 'likes' }),
-        });
-        const data = await res.json();
-        if (data.ok && Array.isArray(data.items)) {
-          setLikedItems(data.items);
-          setUnlikeProgress({ current: 0, total: data.items.length, success: 0, errors: 0 });
-          addLog('success', `Parsed ${data.items.length} liked posts from ${file.name}`);
-        } else {
-          addLog('error', data.error || 'Failed to parse liked posts JSON');
+        const text = event.target?.result as string;
+        let parsed: any;
+        try {
+          parsed = JSON.parse(text);
+        } catch (jsonErr: any) {
+          addLog('error', `Invalid JSON file format: ${jsonErr.message}`);
+          return;
         }
+
+        let rawLikes: any[] = [];
+        if (Array.isArray(parsed)) {
+          rawLikes = parsed;
+        } else if (parsed && typeof parsed === 'object') {
+          rawLikes = parsed.likes_media_likes || parsed.media_likes || [];
+          if (rawLikes.length === 0) {
+            // Find any array property that might contain likes
+            for (const key of Object.keys(parsed)) {
+              if (Array.isArray(parsed[key]) && parsed[key].length > 0) {
+                rawLikes = parsed[key];
+                break;
+              }
+            }
+          }
+        }
+
+        if (rawLikes.length === 0) {
+          addLog('warning', `No liked posts found in ${file.name}. Please ensure this is the liked_posts.json file.`);
+          return;
+        }
+
+        const items: LikedPostItem[] = [];
+        for (let i = 0; i < rawLikes.length; i++) {
+          const it = rawLikes[i];
+          let href = '';
+          let timestamp: number | undefined;
+
+          if (Array.isArray(it.string_list_data) && it.string_list_data.length > 0) {
+            href = it.string_list_data[0]?.href || '';
+            timestamp = it.string_list_data[0]?.timestamp;
+          } else if (typeof it.href === 'string') {
+            href = it.href;
+            timestamp = it.timestamp;
+          } else if (typeof it.url === 'string') {
+            href = it.url;
+            timestamp = it.timestamp;
+          }
+
+          if (!href) continue;
+
+          const match = href.match(/\/(?:p|reel|tv)\/([A-Za-z0-9_-]+)/);
+          const shortcode = match ? match[1] : '';
+          const mediaId = shortcode ? instagramCodeToMediaId(shortcode) : '';
+
+          let dateStr = '';
+          if (timestamp) {
+            try {
+              dateStr = new Date(timestamp * 1000).toLocaleString();
+            } catch {
+              // ignore
+            }
+          }
+
+          items.push({
+            id: `like-${i}-${shortcode || i}`,
+            url: href,
+            shortcode,
+            mediaId,
+            timestamp,
+            dateStr,
+            status: 'pending',
+          });
+        }
+
+        if (items.length === 0) {
+          addLog('warning', 'Found entries in the JSON file, but none contained valid Instagram post links.');
+          return;
+        }
+
+        setLikedItems(items);
+        setUnlikeProgress({ current: 0, total: items.length, success: 0, errors: 0 });
+        addLog('success', `Parsed ${items.length} liked posts from ${file.name}`);
       } catch (err: any) {
-        addLog('error', `File error: ${err.message}`);
+        addLog('error', `Parsing error: ${err.message}`);
       }
     };
     reader.readAsText(file);
