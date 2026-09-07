@@ -28,23 +28,43 @@ export async function POST(req: NextRequest) {
     for (let i = 0; i < rawLikes.length; i++) {
       const item = rawLikes[i];
       let href = '';
-      let timestamp: number | undefined;
+      let timestamp: number | undefined = item.timestamp;
+      let caption: string | undefined;
 
-      if (Array.isArray(item.string_list_data) && item.string_list_data.length > 0) {
+      if (Array.isArray(item.label_values)) {
+        for (const lv of item.label_values) {
+          if (lv?.label === 'URL' || lv?.href) {
+            href = lv.href || lv.value || '';
+          } else if (lv?.label === 'Caption' && typeof lv.value === 'string') {
+            caption = lv.value;
+          } else if (!href && typeof lv?.value === 'string' && lv.value.includes('instagram.com')) {
+            href = lv.value;
+          }
+        }
+      }
+
+      if (!href && Array.isArray(item.string_list_data) && item.string_list_data.length > 0) {
         href = item.string_list_data[0]?.href || '';
-        timestamp = item.string_list_data[0]?.timestamp;
+        if (!timestamp) timestamp = item.string_list_data[0]?.timestamp;
+      } else if (!href && typeof item.href === 'string') {
+        href = item.href;
+      } else if (!href && typeof item.url === 'string') {
+        href = item.url;
+      } else if (!href && typeof item.link === 'string') {
+        href = item.link;
       }
 
       if (!href) continue;
 
       const match = href.match(/\/(?:p|reel|tv)\/([A-Za-z0-9_-]+)/);
       const shortcode = match ? match[1] : '';
-      const mediaId = shortcode ? instagramCodeToMediaId(shortcode) : '';
+      let mediaId = shortcode ? instagramCodeToMediaId(shortcode) : '';
+      if (!mediaId && item.fbid) mediaId = String(item.fbid);
 
       let dateStr = '';
       if (timestamp) {
         try {
-          dateStr = new Date(timestamp * 1000).toLocaleString();
+          dateStr = new Date(Number(timestamp) * 1000).toLocaleString();
         } catch {
           // ignore
         }
@@ -55,7 +75,8 @@ export async function POST(req: NextRequest) {
         url: href,
         shortcode,
         mediaId,
-        timestamp,
+        caption,
+        timestamp: typeof timestamp === 'number' ? timestamp : Number(timestamp),
         dateStr,
         status: 'pending',
       });

@@ -211,32 +211,53 @@ export default function Dashboard() {
         for (let i = 0; i < rawLikes.length; i++) {
           const it = rawLikes[i];
           let href = '';
-          let timestamp: number | undefined;
+          let timestamp: number | undefined = it.timestamp;
+          let caption: string | undefined;
 
-          if (Array.isArray(it.string_list_data) && it.string_list_data.length > 0) {
+          // 1. Support new Meta export schema with label_values
+          if (Array.isArray(it.label_values)) {
+            for (const lv of it.label_values) {
+              if (lv?.label === 'URL' || lv?.href) {
+                href = lv.href || lv.value || '';
+              } else if (lv?.label === 'Caption' && typeof lv.value === 'string') {
+                caption = lv.value;
+              } else if (!href && typeof lv?.value === 'string' && lv.value.includes('instagram.com')) {
+                href = lv.value;
+              }
+            }
+          }
+
+          // 2. Support classic export schema with string_list_data
+          if (!href && Array.isArray(it.string_list_data) && it.string_list_data.length > 0) {
             href = it.string_list_data[0]?.href || '';
-            timestamp = it.string_list_data[0]?.timestamp;
-          } else if (typeof it.href === 'string') {
+            if (!timestamp) timestamp = it.string_list_data[0]?.timestamp;
+          } else if (!href && typeof it.href === 'string') {
             href = it.href;
-            timestamp = it.timestamp;
-          } else if (typeof it.url === 'string') {
+          } else if (!href && typeof it.url === 'string') {
             href = it.url;
-            timestamp = it.timestamp;
-          } else if (typeof it.link === 'string') {
+          } else if (!href && typeof it.link === 'string') {
             href = it.link;
-            timestamp = it.timestamp;
+          } else if (!href && typeof it.value === 'string' && it.value.includes('instagram.com')) {
+            href = it.value;
+          }
+
+          // 3. Check media array fallback
+          if (!href && Array.isArray(it.media) && it.media.length > 0) {
+            const m = it.media[0];
+            href = m?.uri || m?.href || m?.url || '';
           }
 
           if (!href) continue;
 
           const match = href.match(/\/(?:p|reel|tv)\/([A-Za-z0-9_-]+)/);
           const shortcode = match ? match[1] : '';
-          const mediaId = shortcode ? instagramCodeToMediaId(shortcode) : '';
+          let mediaId = shortcode ? instagramCodeToMediaId(shortcode) : '';
+          if (!mediaId && it.fbid) mediaId = String(it.fbid);
 
           let dateStr = '';
           if (timestamp) {
             try {
-              dateStr = new Date(timestamp * 1000).toLocaleString();
+              dateStr = new Date(Number(timestamp) * 1000).toLocaleString();
             } catch {
               // ignore
             }
@@ -247,7 +268,8 @@ export default function Dashboard() {
             url: href,
             shortcode,
             mediaId,
-            timestamp,
+            caption,
+            timestamp: typeof timestamp === 'number' ? timestamp : Number(timestamp),
             dateStr,
             status: 'pending',
           });
@@ -671,15 +693,22 @@ export default function Dashboard() {
                         <tr key={item.id} className="hover:bg-gray-900/40 transition">
                           <td className="py-2 px-4 text-gray-500">{idx + 1}</td>
                           <td className="py-2 px-4 text-gray-300 max-w-xs truncate">
-                            <a
-                              href={item.url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="text-pink-400 hover:underline flex items-center gap-1 inline-flex"
-                            >
-                              {item.url}
-                              <ExternalLink className="w-3 h-3" />
-                            </a>
+                            <div className="flex flex-col">
+                              <a
+                                href={item.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-pink-400 hover:underline flex items-center gap-1 inline-flex truncate"
+                              >
+                                {item.url}
+                                <ExternalLink className="w-3 h-3 flex-shrink-0" />
+                              </a>
+                              {item.caption && (
+                                <span className="text-[10px] text-gray-400 truncate mt-0.5" title={item.caption}>
+                                  {item.caption}
+                                </span>
+                              )}
+                            </div>
                           </td>
                           <td className="py-2 px-4 text-gray-400">{item.shortcode || '—'}</td>
                           <td className="py-2 px-4 text-gray-400">{item.dateStr || '—'}</td>

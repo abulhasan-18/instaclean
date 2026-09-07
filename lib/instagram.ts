@@ -9,6 +9,7 @@ export interface LikedPostItem {
   mediaId: string;
   timestamp?: number;
   dateStr?: string;
+  caption?: string;
   status?: 'pending' | 'processing' | 'unliked' | 'failed' | 'skipped';
   error?: string;
 }

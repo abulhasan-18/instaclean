@@ -337,8 +337,24 @@ class InstagramTool:
         while items and self.running:
             item = items.pop(0)
             href = ""
-            if "string_list_data" in item and len(item["string_list_data"]) > 0:
+            caption = ""
+            if "label_values" in item and isinstance(item["label_values"], list):
+                for lv in item["label_values"]:
+                    if lv.get("label") == "URL" or "href" in lv:
+                        href = lv.get("href") or lv.get("value") or ""
+                    elif lv.get("label") == "Caption" and isinstance(lv.get("value"), str):
+                        caption = lv.get("value")
+                    elif not href and isinstance(lv.get("value"), str) and "instagram.com" in lv.get("value"):
+                        href = lv.get("value")
+
+            if not href and "string_list_data" in item and len(item["string_list_data"]) > 0:
                 href = item["string_list_data"][0].get("href", "")
+            elif not href and "href" in item:
+                href = item.get("href", "")
+            elif not href and "url" in item:
+                href = item.get("url", "")
+            elif not href and "link" in item:
+                href = item.get("link", "")
 
             if not href:
                 continue
@@ -346,8 +362,15 @@ class InstagramTool:
             try:
                 media_id = instagram_code_to_media_id(href)
             except Exception:
-                errors += 1
-                continue
+                if "fbid" in item and item["fbid"]:
+                    try:
+                        media_id = int(item["fbid"])
+                    except Exception:
+                        errors += 1
+                        continue
+                else:
+                    errors += 1
+                    continue
 
             delay = random.uniform(self.config["delay"]["min"], self.config["delay"]["max"])
             time.sleep(delay)
