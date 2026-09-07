@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { instagramApiRequest } from '@/lib/instagram';
+import { instagramGraphQLUnlike } from '@/lib/instagram';
 
 export const dynamic = 'force-dynamic';
 
@@ -81,19 +81,18 @@ export async function POST(req: NextRequest) {
         const maxRetries = settings.maxRetries || 3;
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
           try {
-            const res = await instagramApiRequest(`/api/v1/web/likes/${mediaId}/unlike/`, {
-              method: 'POST',
+            const res = await instagramGraphQLUnlike({
+              mediaId,
               sessionId,
               csrfToken,
               dsUserId,
-              body: {},
             });
 
-            if (res.status === 200 && res.data?.status === 'ok') {
+            if (res.ok) {
               success = true;
               break;
             } else {
-              lastError = res.data?.message || `HTTP ${res.status}`;
+              lastError = res.data?.errors?.[0]?.message || res.data?.message || `HTTP ${res.status}`;
               if (attempt < maxRetries) {
                 await sleep(5000);
               }

@@ -1,16 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { instagramApiRequest, autoFetchCsrfToken } from '@/lib/instagram';
+import { instagramApiRequest, autoFetchCsrfToken, parseCookieString } from '@/lib/instagram';
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
-    const { sessionId } = body;
+    const { cookieHeader } = body;
+    let sessionId = body.sessionId?.trim() || '';
     let csrfToken = body.csrfToken?.trim() || '';
     let dsUserId = body.dsUserId?.trim() || '';
 
+    if (cookieHeader) {
+      const parsed = parseCookieString(cookieHeader);
+      if (parsed['sessionid'] && !sessionId) sessionId = parsed['sessionid'];
+      if (parsed['csrftoken'] && !csrfToken) csrfToken = parsed['csrftoken'];
+      if (parsed['ds_user_id'] && !dsUserId) dsUserId = parsed['ds_user_id'];
+    }
+
     if (!sessionId) {
       return NextResponse.json(
-        { ok: false, message: 'Session ID is required' },
+        { ok: false, message: 'Session ID or Cookie Header is required' },
         { status: 400 }
       );
     }
@@ -23,22 +31,20 @@ export async function POST(req: NextRequest) {
     }
 
     console.log('[Auth Validate] Testing session for dsUserId:', dsUserId);
-    console.log('[Auth Validate] Using csrfToken:', csrfToken);
+
+    const assembledCookie = cookieHeader || `sessionid=${sessionId.trim()}; ds_user_id=${dsUserId}${csrfToken ? `; csrftoken=${csrfToken}` : ''}`;
 
     // Method 1: Fetch main page https://www.instagram.com/ with session cookie
-    // If authenticated, it does not redirect to /accounts/login/ and contains viewer data
     const homeRes = await fetch('https://www.instagram.com/', {
       headers: {
         'User-Agent':
-          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-        Cookie: `sessionid=${sessionId.trim()}; ds_user_id=${dsUserId}${csrfToken ? `; csrftoken=${csrfToken}` : ''}`,
+          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36',
+        Cookie: assembledCookie,
       },
       redirect: 'manual',
     });
 
-    console.log('[Auth Validate] homeRes status:', homeRes.status);
     const location = homeRes.headers.get('location') || '';
-    console.log('[Auth Validate] homeRes redirect location:', location);
 
     if (homeRes.status === 302 && location.includes('/accounts/login/')) {
       return NextResponse.json(
@@ -57,7 +63,6 @@ export async function POST(req: NextRequest) {
     const usernameMatch = html.match(/"username":"([a-zA-Z0-9._]+)"/);
     if (usernameMatch) {
       username = usernameMatch[1];
-      console.log('[Auth Validate] Found username in HTML:', username);
     }
 
     // Also extract csrftoken from set-cookie if missing
@@ -67,22 +72,14 @@ export async function POST(req: NextRequest) {
       csrfToken = cookieCsrfMatch[1];
     }
 
-    // Method 2: API check via web_profile_info or notifications
-    const apiRes = await instagramApiRequest('/api/v1/notifications/badge/', {
-      method: 'GET',
-      sessionId,
-      csrfToken,
-      dsUserId,
-    });
-    console.log('[Auth Validate] badgeRes status:', apiRes.status, 'data:', JSON.stringify(apiRes.data));
-
-    // If home page didn't redirect to login OR badgeRes returned 200, session is confirmed valid!
-    if (homeRes.status === 200 || apiRes.status === 200) {
+    // If home page returned 200 or html contains "logged-in", session is confirmed!
+    if (homeRes.status === 200 || html.includes('logged-in')) {
       return NextResponse.json({
         ok: true,
         username: username || dsUserId,
         csrfToken,
         dsUserId,
+        sessionId,
         message: username ? `Connected as @${username}` : 'Instagram session is valid and active!',
       });
     }
@@ -90,7 +87,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       {
         ok: false,
-        message: `Instagram returned status ${homeRes.status || apiRes.status}. Check your session tokens.`,
+        message: `Instagram returned status ${homeRes.status}. Check your session tokens.`,
       },
       { status: 400 }
     );

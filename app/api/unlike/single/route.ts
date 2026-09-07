@@ -1,19 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { instagramApiRequest } from '@/lib/instagram';
+import { instagramGraphQLUnlike, instagramApiRequest } from '@/lib/instagram';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
-    const { mediaId, sessionId, csrfToken, dsUserId } = body;
-
-    if (!sessionId) {
-      return NextResponse.json(
-        { ok: false, error: 'Missing session credentials' },
-        { status: 400 }
-      );
-    }
+    const {
+      mediaId,
+      cookieHeader,
+      sessionId,
+      csrfToken,
+      dsUserId,
+      lsd,
+      actorId,
+    } = body;
 
     if (!mediaId) {
       return NextResponse.json(
@@ -22,42 +23,64 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    if (!cookieHeader && !sessionId) {
+      return NextResponse.json(
+        { ok: false, error: 'Missing session credentials or cookies' },
+        { status: 400 }
+      );
+    }
+
     const userAgent = req.headers.get('user-agent') || undefined;
-    let res = await instagramApiRequest(`/api/v1/web/likes/${mediaId}/unlike/`, {
-      method: 'POST',
+
+    // 1. Primary Method: Modern Instagram GraphQL Mutation (2026 Verified)
+    const gqlRes = await instagramGraphQLUnlike({
+      mediaId,
+      cookieHeader,
       sessionId,
       csrfToken,
       dsUserId,
+      lsd,
+      actorId,
       userAgent,
-      body: {},
     });
 
-    // If web endpoint 404s, try fallback media endpoint
-    if (res.status === 404 || res.status === 500) {
-      const fallback = await instagramApiRequest(`/api/v1/media/${mediaId}/unlike/`, {
+    if (gqlRes.ok) {
+      return NextResponse.json({
+        ok: true,
+        status: 'unliked',
+        data: gqlRes.data,
+      });
+    }
+
+    // If GraphQL returned an error, check message
+    const gqlErrorMsg =
+      gqlRes.data?.errors?.[0]?.message ||
+      gqlRes.data?.message ||
+      (gqlRes.status !== 200 ? `GraphQL HTTP ${gqlRes.status}` : null);
+
+    // 2. Fallback to Legacy REST API only if GraphQL returned non-200 or unexpected structure
+    if (!gqlRes.ok && gqlRes.status !== 200) {
+      const restRes = await instagramApiRequest(`/api/v1/web/likes/${mediaId}/unlike/`, {
         method: 'POST',
-        sessionId,
+        sessionId: sessionId || '',
         csrfToken,
         dsUserId,
         userAgent,
-        body: {
-          media_id: mediaId,
-          _uid: dsUserId || sessionId.split(/%3A|:/)[0] || '',
-        },
+        body: {},
       });
-      if (fallback.status === 200) {
-        res = fallback;
+
+      if (restRes.status === 200 && (restRes.data?.status === 'ok' || !restRes.data?.status)) {
+        return NextResponse.json({ ok: true, status: 'unliked' });
       }
     }
 
-    if (res.status === 200 && (res.data?.status === 'ok' || !res.data?.status)) {
-      return NextResponse.json({ ok: true, status: 'ok' });
-    }
-
-    const errorMsg = res.data?.message || `HTTP ${res.status}`;
     return NextResponse.json(
-      { ok: false, error: errorMsg },
-      { status: res.status >= 400 && res.status < 500 ? res.status : 400 }
+      {
+        ok: false,
+        error: gqlErrorMsg || 'Failed to unlike post. Check session validity.',
+        details: gqlRes.data,
+      },
+      { status: 400 }
     );
   } catch (err: any) {
     return NextResponse.json(

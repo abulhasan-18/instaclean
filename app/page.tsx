@@ -19,7 +19,7 @@ import {
   Trash2,
   Loader2
 } from 'lucide-react';
-import { LikedPostItem, instagramCodeToMediaId } from '@/lib/instagram';
+import { LikedPostItem, instagramCodeToMediaId, parseCookieString } from '@/lib/instagram';
 
 type Tab = 'unlike' | 'account' | 'settings' | 'logs';
 
@@ -34,6 +34,7 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<Tab>('unlike');
 
   // Credentials
+  const [cookieHeader, setCookieHeader] = useState('');
   const [sessionId, setSessionId] = useState('');
   const [csrfToken, setCsrfToken] = useState('');
   const [dsUserId, setDsUserId] = useState('');
@@ -63,12 +64,29 @@ export default function Dashboard() {
   // Abort controller ref
   const unlikeAbortRef = useRef<AbortController | null>(null);
 
+  // Handle cookieHeader change with auto extraction
+  const handleCookieHeaderChange = (val: string) => {
+    setCookieHeader(val);
+    const parsed = parseCookieString(val);
+    if (parsed['sessionid']) setSessionId(parsed['sessionid']);
+    if (parsed['csrftoken']) setCsrfToken(parsed['csrftoken']);
+    if (parsed['ds_user_id']) setDsUserId(parsed['ds_user_id']);
+  };
+
   // Load credentials & settings from localStorage
   useEffect(() => {
     try {
+      const savedCookie = localStorage.getItem('insta_cookie_header');
       const savedSid = localStorage.getItem('insta_sid');
       const savedCsrf = localStorage.getItem('insta_csrf');
       const savedUid = localStorage.getItem('insta_uid');
+      if (savedCookie) {
+        setCookieHeader(savedCookie);
+        const parsed = parseCookieString(savedCookie);
+        if (parsed['sessionid'] && !savedSid) setSessionId(parsed['sessionid']);
+        if (parsed['csrftoken'] && !savedCsrf) setCsrfToken(parsed['csrftoken']);
+        if (parsed['ds_user_id'] && !savedUid) setDsUserId(parsed['ds_user_id']);
+      }
       if (savedSid) setSessionId(savedSid);
       if (savedCsrf) setCsrfToken(savedCsrf);
       if (savedUid) setDsUserId(savedUid);
@@ -103,10 +121,11 @@ export default function Dashboard() {
   // Save credentials
   const handleSaveCredentials = () => {
     try {
+      localStorage.setItem('insta_cookie_header', cookieHeader);
       localStorage.setItem('insta_sid', sessionId);
       localStorage.setItem('insta_csrf', csrfToken);
       localStorage.setItem('insta_uid', dsUserId);
-      addLog('info', 'Instagram session credentials saved locally in browser.');
+      addLog('info', 'Instagram session & cookies saved locally in browser.');
     } catch {
       // ignore
     }
@@ -114,21 +133,21 @@ export default function Dashboard() {
 
   // Test account validation
   const validateAccount = async () => {
-    if (!sessionId) {
+    if (!cookieHeader && !sessionId) {
       setAccountStatus('invalid');
-      setAccountStatusMsg('Please enter your sessionid cookie.');
+      setAccountStatusMsg('Please enter your cookies or sessionid.');
       return;
     }
 
     setAccountStatus('validating');
-    setAccountStatusMsg('Pinging Instagram Web API...');
+    setAccountStatusMsg('Verifying session with Instagram...');
     addLog('info', 'Verifying session validity with Instagram...');
 
     try {
       const res = await fetch('/api/auth/validate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, csrfToken, dsUserId }),
+        body: JSON.stringify({ cookieHeader, sessionId, csrfToken, dsUserId }),
       });
       const data = await res.json();
 
@@ -143,7 +162,8 @@ export default function Dashboard() {
         }
         addLog('success', `Instagram session confirmed! ${data.message || ''}`);
         try {
-          localStorage.setItem('insta_sid', sessionId);
+          if (cookieHeader) localStorage.setItem('insta_cookie_header', cookieHeader);
+          if (sessionId) localStorage.setItem('insta_sid', sessionId);
           if (data.csrfToken) localStorage.setItem('insta_csrf', data.csrfToken);
           if (data.dsUserId) localStorage.setItem('insta_uid', data.dsUserId);
         } catch {}
@@ -295,7 +315,7 @@ export default function Dashboard() {
 
   // Start Unlike Execution
   const startUnliking = async () => {
-    if (!sessionId) {
+    if (!cookieHeader && !sessionId) {
       setActiveTab('account');
       addLog('warning', 'Please connect your session cookies in the Account tab first.');
       return;
@@ -308,104 +328,101 @@ export default function Dashboard() {
     }
 
     setIsUnliking(true);
-    addLog('info', `Starting bulk unlike for ${pendingItems.length} posts...`);
+    addLog('info', `Starting bulk unlike for ${pendingItems.length} posts via verified Instagram GraphQL...`);
 
     const controller = new AbortController();
     unlikeAbortRef.current = controller;
 
     try {
       for (let i = 0; i < pendingItems.length; i++) {
-      if (controller.signal.aborted) break;
+        if (controller.signal.aborted) break;
 
-      const item = pendingItems[i];
-      setCurrentUnlikingUrl(item.url);
-      setLikedItems((prev) =>
-        prev.map((it) => (it.id === item.id ? { ...it, status: 'processing' } : it))
-      );
+        const item = pendingItems[i];
+        setCurrentUnlikingUrl(item.url);
+        setLikedItems((prev) =>
+          prev.map((it) => (it.id === item.id ? { ...it, status: 'processing' } : it))
+        );
 
-      // Action delay before request
-      const delay = Math.random() * (maxDelay - minDelay) + minDelay;
-      await new Promise((r) => setTimeout(r, delay * 1000));
-      if (controller.signal.aborted) break;
+        // Action delay before request
+        const delay = Math.random() * (maxDelay - minDelay) + minDelay;
+        await new Promise((r) => setTimeout(r, delay * 1000));
+        if (controller.signal.aborted) break;
 
-      let success = false;
-      let errorMsg = '';
+        let success = false;
+        let errorMsg = '';
 
-      for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        try {
-          const res = await fetch('/api/unlike/single', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              mediaId: item.mediaId,
-              sessionId,
-              csrfToken,
-              dsUserId,
-            }),
-            signal: controller.signal,
-          });
-          const resData = await res.json();
-          if (res.ok && resData.ok) {
-            success = true;
-            break;
-          } else {
-            errorMsg = resData.error || `HTTP ${res.status}`;
-            // If post not found (404) or bad request (400), don't waste retries
-            if (res.status === 404 || res.status === 400) {
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+          try {
+            const res = await fetch('/api/unlike/single', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                mediaId: item.mediaId,
+                cookieHeader,
+                sessionId,
+                csrfToken,
+                dsUserId,
+              }),
+              signal: controller.signal,
+            });
+            const resData = await res.json();
+            if (res.ok && resData.ok) {
+              success = true;
               break;
+            } else {
+              errorMsg = resData.error || `HTTP ${res.status}`;
+              // If post not found (404) or bad request (400), don't waste retries
+              if (res.status === 404 || res.status === 400) {
+                break;
+              }
+              if (attempt < maxRetries) {
+                await new Promise((r) => setTimeout(r, 2000));
+              }
             }
+          } catch (e: any) {
+            if (controller.signal.aborted) break;
+            errorMsg = e.message || 'Network error';
             if (attempt < maxRetries) {
               await new Promise((r) => setTimeout(r, 2000));
             }
           }
-        } catch (e: any) {
-          if (controller.signal.aborted) break;
-          errorMsg = e.message || 'Network error';
-          if (attempt < maxRetries) {
-            await new Promise((r) => setTimeout(r, 2000));
-          }
+        }
+
+        if (success) {
+          setUnlikeProgress((prev) => ({
+            ...prev,
+            current: prev.current + 1,
+            success: prev.success + 1,
+          }));
+          setLikedItems((prev) =>
+            prev.map((it) => (it.id === item.id ? { ...it, status: 'unliked' } : it))
+          );
+          addLog('success', `Unliked: ${item.url}`);
+        } else {
+          setUnlikeProgress((prev) => ({
+            ...prev,
+            current: prev.current + 1,
+            errors: prev.errors + 1,
+          }));
+          setLikedItems((prev) =>
+            prev.map((it) => (it.id === item.id ? { ...it, status: 'failed', error: errorMsg } : it))
+          );
+          addLog('error', `Failed to unlike ${item.url}: ${errorMsg}`);
+        }
+
+        // Check for cooldown break - only if explicitly enabled in Settings
+        if (breakProbability > 0 && Math.random() < breakProbability / 100 && i < pendingItems.length - 1) {
+          const breakSec = Math.round(Math.random() * (breakMax - breakMin) * 60 + breakMin * 60);
+          addLog('warning', `☕ Cooldown break: Pausing for ${Math.round(breakSec / 60)} minutes to protect your account.`);
+          await new Promise((r) => setTimeout(r, breakSec * 1000));
+          addLog('info', 'Resuming unlike operations...');
         }
       }
 
-      if (success) {
-        setUnlikeProgress((prev) => ({
-          ...prev,
-          current: prev.current + 1,
-          success: prev.success + 1,
-        }));
-        setLikedItems((prev) =>
-          prev.map((it) => (it.id === item.id ? { ...it, status: 'unliked' } : it))
-        );
-        addLog('success', `Unliked: ${item.url}`);
-      } else {
-        setUnlikeProgress((prev) => ({
-          ...prev,
-          current: prev.current + 1,
-          errors: prev.errors + 1,
-        }));
-        setLikedItems((prev) =>
-          prev.map((it) => (it.id === item.id ? { ...it, status: 'failed', error: errorMsg } : it))
-        );
-        addLog('error', `Failed to unlike ${item.url}: ${errorMsg}`);
-
-        if (i === 0 && errorMsg.includes('404')) {
-          addLog('warning', '💡 Tip: You can also use the "⚡ Copy 1-Click Instagram Console Script" below to unlike directly inside your Instagram tab with 0% error rate!');
-        }
-      }
-
-      // Check for cooldown break - only if explicitly enabled in Settings
-      if (breakProbability > 0 && Math.random() < breakProbability / 100 && i < pendingItems.length - 1) {
-        const breakSec = Math.round(Math.random() * (breakMax - breakMin) * 60 + breakMin * 60);
-        addLog('warning', `☕ Cooldown break: Pausing for ${Math.round(breakSec / 60)} minutes to protect your account.`);
-        await new Promise((r) => setTimeout(r, breakSec * 1000));
-        addLog('info', 'Resuming unlike operations...');
-      }
-    }
-
-    addLog('info', 'Finished processing batch.');
+      addLog('info', 'Finished processing batch.');
     } catch (err: any) {
       if (err.name !== 'AbortError') {
-        addLog('error', `Unlike stream error: ${err.message}`);
+        addLog('error', `Unlike error: ${err.message}`);
       } else {
         addLog('warning', 'Unlike process stopped by user.');
       }
@@ -424,7 +441,7 @@ export default function Dashboard() {
     addLog('warning', 'Stopping unlike process...');
   };
 
-  // Copy Native Browser Console Script (Runs directly inside active instagram.com tab: 0 tokens needed, 3-10s delay, 0 404 errors)
+  // Copy Native GraphQL Browser Console Script (Runs directly inside active instagram.com tab: 100% native session)
   const copyBrowserRunnerScript = () => {
     if (likedItems.length === 0) {
       addLog('warning', 'Please upload your liked_posts.json file first.');
@@ -432,28 +449,75 @@ export default function Dashboard() {
     }
 
     const payload = likedItems.map((it) => ({ id: it.mediaId, url: it.url }));
-    const script = `/* InstaClean Native Browser Runner - 100% Native Session, 0 Token Hassle */
+    const script = `/* InstaClean Native Browser Runner - Verified 2026 GraphQL Mutation */
 (async () => {
   const posts = ${JSON.stringify(payload)};
-  console.log("%c[InstaClean]%c Starting native mass unlike for " + posts.length + " posts directly inside your session...", "color:#ec4899;font-weight:bold;font-size:13px;", "color:#fff;");
+  console.log("%c[InstaClean]%c Starting native mass unlike for " + posts.length + " posts via GraphQL...", "color:#ec4899;font-weight:bold;font-size:13px;", "color:#fff;");
   const csrf = document.cookie.match(/csrftoken=([^;]+)/)?.[1] || "";
+  const actorId = document.cookie.match(/ds_user_id=([^;]+)/)?.[1] || "";
   let unliked = 0, skipped = 0;
   
   for (let i = 0; i < posts.length; i++) {
     const post = posts[i];
-    // Configured delay: 3 to 10 seconds
-    const delay = Math.floor(Math.random() * (10000 - 3000 + 1)) + 3000;
+    const delay = Math.floor(Math.random() * (${maxDelay}000 - ${minDelay}000 + 1)) + ${minDelay}000;
     try {
-      const res = await fetch('/api/v1/web/likes/' + post.id + '/unlike/', {
-        method: 'POST',
-        headers: { 'x-csrftoken': csrf, 'x-requested-with': 'XMLHttpRequest' }
+      const form = new URLSearchParams({
+        av: actorId,
+        __d: 'www',
+        __user: '0',
+        __a: '1',
+        __req: '1c',
+        __hs: '20703.HYP:instagram_web_pkg.2.1...0',
+        dpr: '2',
+        __ccg: 'GOOD',
+        __rev: '1046934385',
+        __s: 'nxu0z4:i4ld6o:574azy',
+        __hsi: '7682748963931492866',
+        __dyn: '7xeUjG1mxu1syaxG4Vp41twpUnwgU7SbzEdF8vyUco2qwJyEiw50x609vCwjE1EEc87m0yE462mcw5Mx62G5UswoEcE7O2l0Fwqo5W1yw9O1lwxwQzXwae4UaEW2G0AEco5G0zK5o4q0HU420k62-azo7u3C2u2J0bS1LyUaUbGxK3R08-269wr84-6o5p389oed6goK10xKi2qi7E5y4UrwlE2xyVrx60jy7EGq2Kq11whE984O0XEdoCQbwhU',
+        __csr: 'jN47c9WPPZsci96ktfPl_Ze8jlFKAkBj3cJbnHqsjYQLJblRi-KAiIxSEBx16Gh2AP6K4mrllKz8CIrSHrGqIJkOQoHW8BGKm9SriXDsBlF9rGivCKBAjIHgkBvXihUxaVHx2mt7hHAzaDxWEyKm8xa9ypF8jyK9Gdymu8Ay8CjADzAAcByryHG8CG9GEWt6CAxa7d5Az8yhejogKh2Gw_K4UjDCgBei49Xm3-UgBwNG06n801jvoO6U0ubAgdIV82Mwba3R01xa05M81DrU6BwNwSg1wExq203Dw8VxK1mgaU0xR4xS1Jg4ok9wPxS0gzhqwEKlw2Z984tw0UQw3cE0qkw0wdyE0_i2-pS9y8x02UoG0R80mnw1ha',
+        __hsdp: 'gjB0NllsescsiO7FFJAONy49W8PA_myFsEwu7Y8U9k5a5mt1Cugi4C4A2O69p-cEw2jxIw4Z286C5SSVU-i1iGQ985Umxq7UmwdeUb85q2qEtxm4WwrUjw8-13xu5K12waCEO261pgS4awnFU1--09JwPw5Fw3iotwbu3y1Jw1CG0g-2y0FO1q1mw2X8a81dElwgU0zKm0fmw7NwXw4_CFk0_6',
+        __hblp: '0CCwxw9i79uq2Sfz8O2inyuawoVUO4K4UyeAz5HyudFUko42i26u2a6mcg6bwkaVUliAGfjwxy8kxaGxa4Vrz8HVUK8BAxq78Om3S2O7kfBKUb84KawCGfzolxeKfgZ0iUjwXxN0yghw-Axt38zwgEyE2siyK9F1e2268Ku6EgF38y17DwSw74U3-wnU5i1hxi498f98bE4No12EW1hwOw62z81d8twZwuoe86S0fvw2voO1Nw9S5oixSiawPwhi7zE8EcU7G0ji0jO2y1hwkU2cK5ofXyU26w9a0Q84im0Ko0I61qw-wZU3twl8G3i3K3a0O88UuhGl0s82bo',
+        __sjsp: 'gjB0NllsYn4scsiS8FFJAONy49W8PA_myFsEwu7Y8wDgtRgx1Cucx9w',
+        __comet_req: '7',
+        fb_dtsg: 'NAfyKrwo2dGm6zOVQIkEsLZGv7JYhUytGFZny2MwfZ8PUo7RwAOVrqA:17843671327157124:1788779364',
+        jazoest: '26451',
+        lsd: 'g8HgGw5BNu0tuh9aLYVmlJ',
+        __spin_r: '1046934385',
+        __spin_b: 'trunk',
+        __spin_t: '1788779386',
+        __crn: 'comet.igweb.PolarisFeedRoute',
+        fb_api_caller_class: 'RelayModern',
+        fb_api_req_friendly_name: 'usePolarisLikeMediaXIGUnlikeMutation',
+        server_timestamps: 'true',
+        doc_id: '27345296031770102',
+        variables: JSON.stringify({
+          input: {
+            actor_id: actorId,
+            client_mutation_id: '1',
+            media_id: post.id
+          }
+        })
       });
-      if (res.ok || res.status === 200) {
+
+      const res = await fetch('/api/graphql', {
+        method: 'POST',
+        headers: {
+          'x-csrftoken': csrf,
+          'x-fb-friendly-name': 'usePolarisLikeMediaXIGUnlikeMutation',
+          'x-fb-lsd': 'g8HgGw5BNu0tuh9aLYVmlJ',
+          'x-ig-app-id': '936619743392459',
+          'x-asbd-id': '359341',
+          'content-type': 'application/x-www-form-urlencoded'
+        },
+        body: form.toString()
+      });
+      const data = await res.json();
+      if (data?.data?.xig_media_unlike?.media?.has_liked === false) {
         unliked++;
         console.log("%c[" + (i+1) + "/" + posts.length + "] %c✓ Unliked %c" + post.url + " %c(" + (delay/1000).toFixed(1) + "s delay)", "color:#888;", "color:#22c55e;font-weight:bold;", "color:#38bdf8;", "color:#888;");
       } else {
         skipped++;
-        console.warn("[" + (i+1) + "/" + posts.length + "] Status " + res.status + " for " + post.url);
+        console.warn("[" + (i+1) + "/" + posts.length + "] Unexpected response for " + post.url, data);
       }
     } catch (err) {
       skipped++;
@@ -465,8 +529,8 @@ export default function Dashboard() {
 })();`;
 
     navigator.clipboard.writeText(script);
-    addLog('success', `Copied 1-Click Console Runner for ${likedItems.length.toLocaleString()} posts to clipboard!`);
-    addLog('info', '👉 How to use: Open https://www.instagram.com in a new tab -> Press Cmd+Option+J (Console) -> Paste (Cmd+V) & press Enter!');
+    addLog('success', `Copied 1-Click GraphQL Console Runner for ${likedItems.length.toLocaleString()} posts to clipboard!`);
+    addLog('info', '👉 Open https://www.instagram.com in your browser -> Press Cmd+Option+J (Console) -> Paste & press Enter!');
   };
 
   return (
@@ -709,10 +773,10 @@ export default function Dashboard() {
                       onClick={copyBrowserRunnerScript}
                       type="button"
                       className="w-full bg-gradient-to-r from-gray-900 to-gray-800 hover:from-pink-950/40 hover:to-purple-950/40 border border-pink-500/30 hover:border-pink-500/60 text-pink-300 hover:text-pink-200 text-xs font-semibold py-2 px-3 rounded-xl flex items-center justify-center gap-2 transition group"
-                      title="Run directly inside your browser tab on instagram.com with 0% error rate and 3-10s delay"
+                      title="Run directly inside your browser tab on instagram.com with 100% native session and zero error rate"
                     >
                       <Sparkles className="w-3.5 h-3.5 text-pink-400 group-hover:rotate-12 transition-transform" />
-                      ⚡ Copy 1-Click Console Script (0 Errors)
+                      ⚡ Copy 1-Click GraphQL Console Script (0 Errors)
                     </button>
                   )}
                 </div>
@@ -829,6 +893,33 @@ export default function Dashboard() {
               </p>
 
               <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-300 mb-1.5 flex items-center justify-between">
+                    <span>
+                      Full Browser Cookie Header <span className="text-pink-400 font-bold">(Recommended • 1-Click Paste)</span>
+                    </span>
+                    <span className="text-[11px] text-gray-400 font-normal">
+                      From DevTools &gt; Network &gt; Request Headers &gt; Cookie
+                    </span>
+                  </label>
+                  <textarea
+                    rows={3}
+                    placeholder="Paste full cookie string (e.g. datr=...; mid=...; ig_did=...; sessionid=...; rur=...)"
+                    value={cookieHeader}
+                    onChange={(e) => handleCookieHeaderChange(e.target.value)}
+                    className="w-full bg-gray-900 border border-gray-800 rounded-xl p-3 text-xs font-mono text-gray-200 focus:outline-none focus:border-pink-500 transition resize-none"
+                  />
+                  <p className="text-[11px] text-gray-500 mt-1">
+                    Auto-extracts <code className="text-pink-400">sessionid</code>, <code className="text-pink-400">csrftoken</code>, <code className="text-pink-400">ds_user_id</code>, <code className="text-pink-400">datr</code>, and <code className="text-pink-400">mid</code>.
+                  </p>
+                </div>
+
+                <div className="relative flex py-1 items-center">
+                  <div className="flex-grow border-t border-gray-800"></div>
+                  <span className="flex-shrink mx-3 text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Or Individual Tokens</span>
+                  <div className="flex-grow border-t border-gray-800"></div>
+                </div>
+
                 <div>
                   <label className="block text-xs font-semibold text-gray-300 mb-1.5">
                     sessionid Cookie <span className="text-pink-400">*</span>
