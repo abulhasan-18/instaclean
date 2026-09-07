@@ -41,10 +41,11 @@ export default function Dashboard() {
   const [accountStatus, setAccountStatus] = useState<'idle' | 'validating' | 'valid' | 'invalid'>('idle');
   const [accountStatusMsg, setAccountStatusMsg] = useState('');
 
-  // Safety & speed settings (Default: 1,200 unlikes / hr = 2s to 3s delay)
-  const [minDelay, setMinDelay] = useState(2);
-  const [maxDelay, setMaxDelay] = useState(3);
-  const [breakProbability, setBreakProbability] = useState(0); // 0% default (no pauses, continuous 1,200/hr)
+  // Safety & speed settings (Default: Turbo Mode with 10 parallel threads)
+  const [concurrency, setConcurrency] = useState(10);
+  const [minDelay, setMinDelay] = useState(0.5);
+  const [maxDelay, setMaxDelay] = useState(1);
+  const [breakProbability, setBreakProbability] = useState(0); // 0% default (no pauses, continuous)
   const [breakMin, setBreakMin] = useState(3); // minutes
   const [breakMax, setBreakMax] = useState(8); // minutes
   const [maxRetries, setMaxRetries] = useState(1);
@@ -328,24 +329,43 @@ export default function Dashboard() {
     }
 
     setIsUnliking(true);
-    addLog('info', `Starting bulk unlike for ${pendingItems.length} posts via verified Instagram GraphQL...`);
+    const numWorkers = Math.max(1, Math.min(concurrency, pendingItems.length));
+    addLog(
+      'info',
+      `Starting bulk unlike for ${pendingItems.length} posts with ${numWorkers} parallel thread${
+        numWorkers > 1 ? 's' : ''
+      } via verified Instagram GraphQL...`
+    );
 
     const controller = new AbortController();
     unlikeAbortRef.current = controller;
 
-    try {
-      for (let i = 0; i < pendingItems.length; i++) {
+    let nextIndex = 0;
+    const totalPending = pendingItems.length;
+
+    const runWorker = async (workerId: number) => {
+      while (nextIndex < totalPending) {
         if (controller.signal.aborted) break;
+        const currentIndex = nextIndex++;
+        if (currentIndex >= totalPending) break;
 
-        const item = pendingItems[i];
+        const item = pendingItems[currentIndex];
         setCurrentUnlikingUrl(item.url);
-        setLikedItems((prev) =>
-          prev.map((it) => (it.id === item.id ? { ...it, status: 'processing' } : it))
-        );
 
-        // Action delay before request
+        // Mark as processing
+        setLikedItems((prev) => {
+          const idx = prev.findIndex((it) => it.id === item.id);
+          if (idx === -1) return prev;
+          const next = [...prev];
+          next[idx] = { ...next[idx], status: 'processing' };
+          return next;
+        });
+
+        // Worker action delay
         const delay = Math.random() * (maxDelay - minDelay) + minDelay;
-        await new Promise((r) => setTimeout(r, delay * 1000));
+        if (delay > 0) {
+          await new Promise((r) => setTimeout(r, delay * 1000));
+        }
         if (controller.signal.aborted) break;
 
         let success = false;
@@ -371,19 +391,18 @@ export default function Dashboard() {
               break;
             } else {
               errorMsg = resData.error || `HTTP ${res.status}`;
-              // If post not found (404) or bad request (400), don't waste retries
-              if (res.status === 404 || res.status === 400) {
+              if (res.status === 404 || res.status === 400 || res.status === 429) {
                 break;
               }
               if (attempt < maxRetries) {
-                await new Promise((r) => setTimeout(r, 2000));
+                await new Promise((r) => setTimeout(r, 1000));
               }
             }
           } catch (e: any) {
             if (controller.signal.aborted) break;
             errorMsg = e.message || 'Network error';
             if (attempt < maxRetries) {
-              await new Promise((r) => setTimeout(r, 2000));
+              await new Promise((r) => setTimeout(r, 1000));
             }
           }
         }
@@ -394,31 +413,50 @@ export default function Dashboard() {
             current: prev.current + 1,
             success: prev.success + 1,
           }));
-          setLikedItems((prev) =>
-            prev.map((it) => (it.id === item.id ? { ...it, status: 'unliked' } : it))
-          );
-          addLog('success', `Unliked: ${item.url}`);
+          setLikedItems((prev) => {
+            const idx = prev.findIndex((it) => it.id === item.id);
+            if (idx === -1) return prev;
+            const next = [...prev];
+            next[idx] = { ...next[idx], status: 'unliked' };
+            return next;
+          });
+          addLog('success', `[Thread #${workerId}] Unliked: ${item.url}`);
         } else {
           setUnlikeProgress((prev) => ({
             ...prev,
             current: prev.current + 1,
             errors: prev.errors + 1,
           }));
-          setLikedItems((prev) =>
-            prev.map((it) => (it.id === item.id ? { ...it, status: 'failed', error: errorMsg } : it))
-          );
-          addLog('error', `Failed to unlike ${item.url}: ${errorMsg}`);
+          setLikedItems((prev) => {
+            const idx = prev.findIndex((it) => it.id === item.id);
+            if (idx === -1) return prev;
+            const next = [...prev];
+            next[idx] = { ...next[idx], status: 'failed', error: errorMsg };
+            return next;
+          });
+          addLog('error', `[Thread #${workerId}] Failed ${item.url}: ${errorMsg}`);
+
+          if (errorMsg.toLowerCase().includes('feedback_required') || errorMsg.includes('429')) {
+            addLog(
+              'warning',
+              `⚠️ [Thread #${workerId}] Instagram Action Block detected (${errorMsg}). Rate limiter triggered!`
+            );
+          }
         }
 
-        // Check for cooldown break - only if explicitly enabled in Settings
-        if (breakProbability > 0 && Math.random() < breakProbability / 100 && i < pendingItems.length - 1) {
+        // Optional cooldown break (only if breakProbability > 0)
+        if (breakProbability > 0 && Math.random() < breakProbability / 100) {
           const breakSec = Math.round(Math.random() * (breakMax - breakMin) * 60 + breakMin * 60);
-          addLog('warning', `☕ Cooldown break: Pausing for ${Math.round(breakSec / 60)} minutes to protect your account.`);
+          addLog('warning', `☕ [Thread #${workerId}] Cooldown break: Pausing for ${Math.round(breakSec / 60)}m...`);
           await new Promise((r) => setTimeout(r, breakSec * 1000));
-          addLog('info', 'Resuming unlike operations...');
+          addLog('info', `[Thread #${workerId}] Resuming operations...`);
         }
       }
+    };
 
+    try {
+      const workers = Array.from({ length: numWorkers }, (_, i) => runWorker(i + 1));
+      await Promise.all(workers);
       addLog('info', 'Finished processing batch.');
     } catch (err: any) {
       if (err.name !== 'AbortError') {
@@ -449,87 +487,97 @@ export default function Dashboard() {
     }
 
     const payload = likedItems.map((it) => ({ id: it.mediaId, url: it.url }));
-    const script = `/* InstaClean Native Browser Runner - Verified 2026 GraphQL Mutation */
+    const script = `/* InstaClean Native Browser Runner - Verified 2026 GraphQL Mutation (Multi-Threaded) */
 (async () => {
   const posts = ${JSON.stringify(payload)};
-  console.log("%c[InstaClean]%c Starting native mass unlike for " + posts.length + " posts via GraphQL...", "color:#ec4899;font-weight:bold;font-size:13px;", "color:#fff;");
+  const CONCURRENCY = ${concurrency};
+  console.log("%c[InstaClean]%c Starting multi-threaded mass unlike for " + posts.length + " posts with " + CONCURRENCY + " parallel threads...", "color:#ec4899;font-weight:bold;font-size:13px;", "color:#fff;");
   const csrf = document.cookie.match(/csrftoken=([^;]+)/)?.[1] || "";
   const actorId = document.cookie.match(/ds_user_id=([^;]+)/)?.[1] || "";
+  let nextIdx = 0;
   let unliked = 0, skipped = 0;
   
-  for (let i = 0; i < posts.length; i++) {
-    const post = posts[i];
-    const delay = Math.floor(Math.random() * (${maxDelay}000 - ${minDelay}000 + 1)) + ${minDelay}000;
-    try {
-      const form = new URLSearchParams({
-        av: actorId,
-        __d: 'www',
-        __user: '0',
-        __a: '1',
-        __req: '1c',
-        __hs: '20703.HYP:instagram_web_pkg.2.1...0',
-        dpr: '2',
-        __ccg: 'GOOD',
-        __rev: '1046934385',
-        __s: 'nxu0z4:i4ld6o:574azy',
-        __hsi: '7682748963931492866',
-        __dyn: '7xeUjG1mxu1syaxG4Vp41twpUnwgU7SbzEdF8vyUco2qwJyEiw50x609vCwjE1EEc87m0yE462mcw5Mx62G5UswoEcE7O2l0Fwqo5W1yw9O1lwxwQzXwae4UaEW2G0AEco5G0zK5o4q0HU420k62-azo7u3C2u2J0bS1LyUaUbGxK3R08-269wr84-6o5p389oed6goK10xKi2qi7E5y4UrwlE2xyVrx60jy7EGq2Kq11whE984O0XEdoCQbwhU',
-        __csr: 'jN47c9WPPZsci96ktfPl_Ze8jlFKAkBj3cJbnHqsjYQLJblRi-KAiIxSEBx16Gh2AP6K4mrllKz8CIrSHrGqIJkOQoHW8BGKm9SriXDsBlF9rGivCKBAjIHgkBvXihUxaVHx2mt7hHAzaDxWEyKm8xa9ypF8jyK9Gdymu8Ay8CjADzAAcByryHG8CG9GEWt6CAxa7d5Az8yhejogKh2Gw_K4UjDCgBei49Xm3-UgBwNG06n801jvoO6U0ubAgdIV82Mwba3R01xa05M81DrU6BwNwSg1wExq203Dw8VxK1mgaU0xR4xS1Jg4ok9wPxS0gzhqwEKlw2Z984tw0UQw3cE0qkw0wdyE0_i2-pS9y8x02UoG0R80mnw1ha',
-        __hsdp: 'gjB0NllsescsiO7FFJAONy49W8PA_myFsEwu7Y8U9k5a5mt1Cugi4C4A2O69p-cEw2jxIw4Z286C5SSVU-i1iGQ985Umxq7UmwdeUb85q2qEtxm4WwrUjw8-13xu5K12waCEO261pgS4awnFU1--09JwPw5Fw3iotwbu3y1Jw1CG0g-2y0FO1q1mw2X8a81dElwgU0zKm0fmw7NwXw4_CFk0_6',
-        __hblp: '0CCwxw9i79uq2Sfz8O2inyuawoVUO4K4UyeAz5HyudFUko42i26u2a6mcg6bwkaVUliAGfjwxy8kxaGxa4Vrz8HVUK8BAxq78Om3S2O7kfBKUb84KawCGfzolxeKfgZ0iUjwXxN0yghw-Axt38zwgEyE2siyK9F1e2268Ku6EgF38y17DwSw74U3-wnU5i1hxi498f98bE4No12EW1hwOw62z81d8twZwuoe86S0fvw2voO1Nw9S5oixSiawPwhi7zE8EcU7G0ji0jO2y1hwkU2cK5ofXyU26w9a0Q84im0Ko0I61qw-wZU3twl8G3i3K3a0O88UuhGl0s82bo',
-        __sjsp: 'gjB0NllsYn4scsiS8FFJAONy49W8PA_myFsEwu7Y8wDgtRgx1Cucx9w',
-        __comet_req: '7',
-        fb_dtsg: 'NAfyKrwo2dGm6zOVQIkEsLZGv7JYhUytGFZny2MwfZ8PUo7RwAOVrqA:17843671327157124:1788779364',
-        jazoest: '26451',
-        lsd: 'g8HgGw5BNu0tuh9aLYVmlJ',
-        __spin_r: '1046934385',
-        __spin_b: 'trunk',
-        __spin_t: '1788779386',
-        __crn: 'comet.igweb.PolarisFeedRoute',
-        fb_api_caller_class: 'RelayModern',
-        fb_api_req_friendly_name: 'usePolarisLikeMediaXIGUnlikeMutation',
-        server_timestamps: 'true',
-        doc_id: '27345296031770102',
-        variables: JSON.stringify({
-          input: {
-            actor_id: actorId,
-            client_mutation_id: '1',
-            media_id: post.id
-          }
-        })
-      });
+  async function worker(threadId) {
+    while (nextIdx < posts.length) {
+      const i = nextIdx++;
+      if (i >= posts.length) break;
+      const post = posts[i];
+      const delay = Math.floor(Math.random() * (${maxDelay}000 - ${minDelay}000 + 1)) + ${minDelay}000;
+      if (delay > 0) await new Promise(r => setTimeout(r, delay));
 
-      const res = await fetch('/api/graphql', {
-        method: 'POST',
-        headers: {
-          'x-csrftoken': csrf,
-          'x-fb-friendly-name': 'usePolarisLikeMediaXIGUnlikeMutation',
-          'x-fb-lsd': 'g8HgGw5BNu0tuh9aLYVmlJ',
-          'x-ig-app-id': '936619743392459',
-          'x-asbd-id': '359341',
-          'content-type': 'application/x-www-form-urlencoded'
-        },
-        body: form.toString()
-      });
-      const data = await res.json();
-      if (data?.data?.xig_media_unlike?.media?.has_liked === false) {
-        unliked++;
-        console.log("%c[" + (i+1) + "/" + posts.length + "] %c✓ Unliked %c" + post.url + " %c(" + (delay/1000).toFixed(1) + "s delay)", "color:#888;", "color:#22c55e;font-weight:bold;", "color:#38bdf8;", "color:#888;");
-      } else {
+      try {
+        const form = new URLSearchParams({
+          av: actorId,
+          __d: 'www',
+          __user: '0',
+          __a: '1',
+          __req: '1c',
+          __hs: '20703.HYP:instagram_web_pkg.2.1...0',
+          dpr: '2',
+          __ccg: 'GOOD',
+          __rev: '1046934385',
+          __s: 'nxu0z4:i4ld6o:574azy',
+          __hsi: '7682748963931492866',
+          __dyn: '7xeUjG1mxu1syaxG4Vp41twpUnwgU7SbzEdF8vyUco2qwJyEiw50x609vCwjE1EEc87m0yE462mcw5Mx62G5UswoEcE7O2l0Fwqo5W1yw9O1lwxwQzXwae4UaEW2G0AEco5G0zK5o4q0HU420k62-azo7u3C2u2J0bS1LyUaUbGxK3R08-269wr84-6o5p389oed6goK10xKi2qi7E5y4UrwlE2xyVrx60jy7EGq2Kq11whE984O0XEdoCQbwhU',
+          __csr: 'jN47c9WPPZsci96ktfPl_Ze8jlFKAkBj3cJbnHqsjYQLJblRi-KAiIxSEBx16Gh2AP6K4mrllKz8CIrSHrGqIJkOQoHW8BGKm9SriXDsBlF9rGivCKBAjIHgkBvXihUxaVHx2mt7hHAzaDxWEyKm8xa9ypF8jyK9Gdymu8Ay8CjADzAAcByryHG8CG9GEWt6CAxa7d5Az8yhejogKh2Gw_K4UjDCgBei49Xm3-UgBwNG06n801jvoO6U0ubAgdIV82Mwba3R01xa05M81DrU6BwNwSg1wExq203Dw8VxK1mgaU0xR4xS1Jg4ok9wPxS0gzhqwEKlw2Z984tw0UQw3cE0qkw0wdyE0_i2-pS9y8x02UoG0R80mnw1ha',
+          __hsdp: 'gjB0NllsescsiO7FFJAONy49W8PA_myFsEwu7Y8U9k5a5mt1Cugi4C4A2O69p-cEw2jxIw4Z286C5SSVU-i1iGQ985Umxq7UmwdeUb85q2qEtxm4WwrUjw8-13xu5K12waCEO261pgS4awnFU1--09JwPw5Fw3iotwbu3y1Jw1CG0g-2y0FO1q1mw2X8a81dElwgU0zKm0fmw7NwXw4_CFk0_6',
+          __hblp: '0CCwxw9i79uq2Sfz8O2inyuawoVUO4K4UyeAz5HyudFUko42i26u2a6mcg6bwkaVUliAGfjwxy8kxaGxa4Vrz8HVUK8BAxq78Om3S2O7kfBKUb84KawCGfzolxeKfgZ0iUjwXxN0yghw-Axt38zwgEyE2siyK9F1e2268Ku6EgF38y17DwSw74U3-wnU5i1hxi498f98bE4No12EW1hwOw62z81d8twZwuoe86S0fvw2voO1Nw9S5oixSiawPwhi7zE8EcU7G0ji0jO2y1hwkU2cK5ofXyU26w9a0Q84im0Ko0I61qw-wZU3twl8G3i3K3a0O88UuhGl0s82bo',
+          __sjsp: 'gjB0NllsYn4scsiS8FFJAONy49W8PA_myFsEwu7Y8wDgtRgx1Cucx9w',
+          __comet_req: '7',
+          fb_dtsg: 'NAfyKrwo2dGm6zOVQIkEsLZGv7JYhUytGFZny2MwfZ8PUo7RwAOVrqA:17843671327157124:1788779364',
+          jazoest: '26451',
+          lsd: 'g8HgGw5BNu0tuh9aLYVmlJ',
+          __spin_r: '1046934385',
+          __spin_b: 'trunk',
+          __spin_t: '1788779386',
+          __crn: 'comet.igweb.PolarisFeedRoute',
+          fb_api_caller_class: 'RelayModern',
+          fb_api_req_friendly_name: 'usePolarisLikeMediaXIGUnlikeMutation',
+          server_timestamps: 'true',
+          doc_id: '27345296031770102',
+          variables: JSON.stringify({
+            input: {
+              actor_id: actorId,
+              client_mutation_id: '1',
+              media_id: post.id
+            }
+          })
+        });
+
+        const res = await fetch('/api/graphql', {
+          method: 'POST',
+          headers: {
+            'x-csrftoken': csrf,
+            'x-fb-friendly-name': 'usePolarisLikeMediaXIGUnlikeMutation',
+            'x-fb-lsd': 'g8HgGw5BNu0tuh9aLYVmlJ',
+            'x-ig-app-id': '936619743392459',
+            'x-asbd-id': '359341',
+            'content-type': 'application/x-www-form-urlencoded'
+          },
+          body: form.toString()
+        });
+        const data = await res.json();
+        if (data?.data?.xig_media_unlike?.media?.has_liked === false) {
+          unliked++;
+          console.log("%c[Thread " + threadId + "] [" + (i+1) + "/" + posts.length + "] %c✓ Unliked %c" + post.url, "color:#888;", "color:#22c55e;font-weight:bold;", "color:#38bdf8;");
+        } else {
+          skipped++;
+          console.warn("[Thread " + threadId + "] [" + (i+1) + "/" + posts.length + "] Unexpected response for " + post.url, data);
+        }
+      } catch (err) {
         skipped++;
-        console.warn("[" + (i+1) + "/" + posts.length + "] Unexpected response for " + post.url, data);
+        console.error("[Thread " + threadId + "] [" + (i+1) + "/" + posts.length + "] Error unliking " + post.url, err);
       }
-    } catch (err) {
-      skipped++;
-      console.error("[" + (i+1) + "/" + posts.length + "] Error unliking " + post.url, err);
     }
-    await new Promise(r => setTimeout(r, delay));
   }
+
+  const activeThreads = Math.min(CONCURRENCY, posts.length);
+  await Promise.all(Array.from({ length: activeThreads }, (_, i) => worker(i + 1)));
   console.log("%c[InstaClean] Complete! Unliked: " + unliked + ", Skipped: " + skipped, "color:#22c55e;font-size:14px;font-weight:bold;");
 })();`;
 
     navigator.clipboard.writeText(script);
-    addLog('success', `Copied 1-Click GraphQL Console Runner for ${likedItems.length.toLocaleString()} posts to clipboard!`);
+    addLog('success', `Copied Multi-Threaded GraphQL Console Runner (${concurrency} threads) for ${likedItems.length.toLocaleString()} posts to clipboard!`);
     addLog('info', '👉 Open https://www.instagram.com in your browser -> Press Cmd+Option+J (Console) -> Paste & press Enter!');
   };
 
@@ -750,7 +798,16 @@ export default function Dashboard() {
                   <div className="flex items-center justify-between px-1 text-[11px] text-gray-400">
                     <span className="flex items-center gap-1.5">
                       <span className="w-1.5 h-1.5 rounded-full bg-pink-400 animate-pulse" />
-                      Speed: <strong className="text-pink-300 font-mono">⚡ ~1,200 / hr</strong> ({minDelay}s–{maxDelay}s)
+                      Speed:{' '}
+                      {concurrency > 1 ? (
+                        <strong className="text-pink-300 font-mono">
+                          ⚡ Turbo ({concurrency} parallel threads • {minDelay}s–{maxDelay}s)
+                        </strong>
+                      ) : (
+                        <strong className="text-pink-300 font-mono">
+                          ⚡ ~{Math.round(3600 / (((minDelay + maxDelay) / 2) + 0.5))} / hr ({minDelay}s–{maxDelay}s)
+                        </strong>
+                      )}
                     </span>
                     <button
                       type="button"
@@ -1082,17 +1139,39 @@ export default function Dashboard() {
                 <label className="block text-xs font-semibold text-gray-300 mb-2">
                   Speed Presets
                 </label>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
                   <button
                     type="button"
                     onClick={() => {
+                      setConcurrency(10);
+                      setMinDelay(0.5);
+                      setMaxDelay(1);
+                      setBreakProbability(0);
+                      addLog('info', 'Switched to Turbo Multi-Thread Mode (10 parallel threads, 0.5-1s delay).');
+                    }}
+                    className={`p-3 rounded-xl border text-left transition flex flex-col gap-1 ${
+                      concurrency >= 10 && minDelay <= 1 && breakProbability === 0
+                        ? 'bg-gradient-to-br from-pink-500/20 to-purple-500/20 border-pink-500 text-pink-300 shadow-md ring-1 ring-pink-500/40'
+                        : 'bg-gray-900 border-gray-800 text-gray-400 hover:border-gray-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 font-bold text-xs text-white">
+                      <span>⚡ Turbo Multi-Thread</span>
+                    </div>
+                    <span className="text-[10px] text-pink-400 font-semibold">10–12 threads • 0.5s–1s delay</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setConcurrency(1);
                       setMinDelay(2);
                       setMaxDelay(3);
                       setBreakProbability(0);
-                      addLog('info', 'Switched to 1,200 unlikes/hr mode (2-3s delay, continuous).');
+                      addLog('info', 'Switched to 1,200 unlikes/hr mode (1 thread, 2-3s delay).');
                     }}
                     className={`p-3 rounded-xl border text-left transition flex flex-col gap-1 ${
-                      minDelay === 2 && maxDelay === 3 && breakProbability === 0
+                      concurrency === 1 && minDelay === 2 && maxDelay === 3 && breakProbability === 0
                         ? 'bg-pink-500/15 border-pink-500/50 text-pink-300 shadow-md'
                         : 'bg-gray-900 border-gray-800 text-gray-400 hover:border-gray-700'
                     }`}
@@ -1100,19 +1179,20 @@ export default function Dashboard() {
                     <div className="flex items-center gap-1.5 font-bold text-xs text-white">
                       <span>⚡ 1,200 / hr Mode</span>
                     </div>
-                    <span className="text-[10px] text-gray-400">2s–3s delay • ~25h for 31k</span>
+                    <span className="text-[10px] text-gray-400">1 thread • 2s–3s delay</span>
                   </button>
 
                   <button
                     type="button"
                     onClick={() => {
+                      setConcurrency(1);
                       setMinDelay(3);
                       setMaxDelay(8);
                       setBreakProbability(5);
-                      addLog('info', 'Switched to Safe Mode (3-8s delay, 5% breaks).');
+                      addLog('info', 'Switched to Safe Mode (1 thread, 3-8s delay, 5% breaks).');
                     }}
                     className={`p-3 rounded-xl border text-left transition flex flex-col gap-1 ${
-                      minDelay === 3 && maxDelay === 8
+                      concurrency === 1 && minDelay === 3 && maxDelay === 8
                         ? 'bg-blue-500/15 border-blue-500/50 text-blue-300 shadow-md'
                         : 'bg-gray-900 border-gray-800 text-gray-400 hover:border-gray-700'
                     }`}
@@ -1120,19 +1200,20 @@ export default function Dashboard() {
                     <div className="flex items-center gap-1.5 font-bold text-xs text-white">
                       <span>🛡️ Safe Mode</span>
                     </div>
-                    <span className="text-[10px] text-gray-400">3s–8s delay • ~500 / hr</span>
+                    <span className="text-[10px] text-gray-400">1 thread • 3s–8s • 5% breaks</span>
                   </button>
 
                   <button
                     type="button"
                     onClick={() => {
+                      setConcurrency(3);
                       setMinDelay(1);
                       setMaxDelay(2);
                       setBreakProbability(0);
-                      addLog('info', 'Switched to Fast Mode (1-2s delay, ~2,000/hr).');
+                      addLog('info', 'Switched to Fast Mode (3 threads, 1-2s delay).');
                     }}
                     className={`p-3 rounded-xl border text-left transition flex flex-col gap-1 ${
-                      minDelay === 1 && maxDelay === 2
+                      concurrency === 3 && minDelay === 1 && maxDelay === 2
                         ? 'bg-purple-500/15 border-purple-500/50 text-purple-300 shadow-md'
                         : 'bg-gray-900 border-gray-800 text-gray-400 hover:border-gray-700'
                     }`}
@@ -1140,16 +1221,49 @@ export default function Dashboard() {
                     <div className="flex items-center gap-1.5 font-bold text-xs text-white">
                       <span>🚀 Fast Mode</span>
                     </div>
-                    <span className="text-[10px] text-gray-400">1s–2s delay • ~2,000 / hr</span>
+                    <span className="text-[10px] text-gray-400">3 threads • 1s–2s delay</span>
                   </button>
                 </div>
+              </div>
+
+              {/* Parallel Threads / Concurrency */}
+              <div>
+                <div className="flex justify-between text-xs font-semibold text-gray-300 mb-1.5">
+                  <span className="flex items-center gap-1.5">
+                    Parallel Worker Threads (Simultaneous Requests)
+                  </span>
+                  <span className="text-amber-400 font-mono font-bold">
+                    ⚡ {concurrency} thread{concurrency > 1 ? 's' : ''} running simultaneously
+                  </span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="range"
+                    min={1}
+                    max={15}
+                    value={concurrency}
+                    onChange={(e) => setConcurrency(Number(e.target.value))}
+                    className="w-full accent-pink-500 cursor-pointer"
+                  />
+                  <input
+                    type="number"
+                    min={1}
+                    max={20}
+                    value={concurrency}
+                    onChange={(e) => setConcurrency(Math.max(1, Math.min(20, Number(e.target.value))))}
+                    className="w-20 bg-gray-900 border border-gray-800 rounded-xl px-3 py-1.5 text-xs text-center text-gray-200 font-mono focus:outline-none focus:border-pink-500"
+                  />
+                </div>
+                <p className="text-[11px] text-gray-500 mt-1.5">
+                  Fires {concurrency} unlikes simultaneously using asynchronous worker threads. Setting 10–12 threads runs parallel batches for maximum speed.
+                </p>
               </div>
 
               <div>
                 <div className="flex justify-between text-xs font-semibold text-gray-300 mb-1.5">
                   <span>Action Delay Range</span>
                   <span className="text-pink-400 font-mono">
-                    {minDelay}s – {maxDelay}s per action (~{Math.round(3600 / (((minDelay + maxDelay) / 2) + 0.5))} unlikes/hr)
+                    {minDelay}s – {maxDelay}s per thread (~{Math.round(3600 / (((minDelay + maxDelay) / 2) + 0.5)) * concurrency} theoretical unlikes/hr)
                   </span>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
@@ -1158,7 +1272,7 @@ export default function Dashboard() {
                     <input
                       type="number"
                       step="0.5"
-                      min={0.5}
+                      min={0}
                       max={60}
                       value={minDelay}
                       onChange={(e) => setMinDelay(Number(e.target.value))}
@@ -1170,7 +1284,7 @@ export default function Dashboard() {
                     <input
                       type="number"
                       step="0.5"
-                      min={1}
+                      min={0}
                       max={120}
                       value={maxDelay}
                       onChange={(e) => setMaxDelay(Number(e.target.value))}
@@ -1179,7 +1293,7 @@ export default function Dashboard() {
                   </div>
                 </div>
                 <p className="text-[11px] text-gray-500 mt-1.5">
-                  A random delay between Min and Max will be waited before each unlike action.
+                  Each parallel thread waits a random delay between Min and Max between its individual requests.
                 </p>
               </div>
 
