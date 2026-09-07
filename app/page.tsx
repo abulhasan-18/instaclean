@@ -41,10 +41,10 @@ export default function Dashboard() {
   const [accountStatus, setAccountStatus] = useState<'idle' | 'validating' | 'valid' | 'invalid'>('idle');
   const [accountStatusMsg, setAccountStatusMsg] = useState('');
 
-  // Safety settings (user requested: min 3s to 10s per post)
-  const [minDelay, setMinDelay] = useState(3);
-  const [maxDelay, setMaxDelay] = useState(10);
-  const [breakProbability, setBreakProbability] = useState(0); // 0% default (no unexpected 5-min freezes)
+  // Safety & speed settings (Default: 1,200 unlikes / hr = 2s to 3s delay)
+  const [minDelay, setMinDelay] = useState(2);
+  const [maxDelay, setMaxDelay] = useState(3);
+  const [breakProbability, setBreakProbability] = useState(0); // 0% default (no pauses, continuous 1,200/hr)
   const [breakMin, setBreakMin] = useState(3); // minutes
   const [breakMax, setBreakMax] = useState(8); // minutes
   const [maxRetries, setMaxRetries] = useState(1);
@@ -747,6 +747,19 @@ export default function Dashboard() {
                 </div>
 
                 <div className="flex flex-col gap-2">
+                  <div className="flex items-center justify-between px-1 text-[11px] text-gray-400">
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-pink-400 animate-pulse" />
+                      Speed: <strong className="text-pink-300 font-mono">⚡ ~1,200 / hr</strong> ({minDelay}s–{maxDelay}s)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('settings')}
+                      className="text-pink-400 hover:text-pink-300 underline text-[10px]"
+                    >
+                      Adjust
+                    </button>
+                  </div>
                   <div className="flex items-center gap-2">
                     {!isUnliking ? (
                       <button
@@ -1064,11 +1077,79 @@ export default function Dashboard() {
             </p>
 
             <div className="space-y-6">
+              {/* Quick Presets */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-300 mb-2">
+                  Speed Presets
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMinDelay(2);
+                      setMaxDelay(3);
+                      setBreakProbability(0);
+                      addLog('info', 'Switched to 1,200 unlikes/hr mode (2-3s delay, continuous).');
+                    }}
+                    className={`p-3 rounded-xl border text-left transition flex flex-col gap-1 ${
+                      minDelay === 2 && maxDelay === 3 && breakProbability === 0
+                        ? 'bg-pink-500/15 border-pink-500/50 text-pink-300 shadow-md'
+                        : 'bg-gray-900 border-gray-800 text-gray-400 hover:border-gray-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 font-bold text-xs text-white">
+                      <span>⚡ 1,200 / hr Mode</span>
+                    </div>
+                    <span className="text-[10px] text-gray-400">2s–3s delay • ~25h for 31k</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMinDelay(3);
+                      setMaxDelay(8);
+                      setBreakProbability(5);
+                      addLog('info', 'Switched to Safe Mode (3-8s delay, 5% breaks).');
+                    }}
+                    className={`p-3 rounded-xl border text-left transition flex flex-col gap-1 ${
+                      minDelay === 3 && maxDelay === 8
+                        ? 'bg-blue-500/15 border-blue-500/50 text-blue-300 shadow-md'
+                        : 'bg-gray-900 border-gray-800 text-gray-400 hover:border-gray-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 font-bold text-xs text-white">
+                      <span>🛡️ Safe Mode</span>
+                    </div>
+                    <span className="text-[10px] text-gray-400">3s–8s delay • ~500 / hr</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMinDelay(1);
+                      setMaxDelay(2);
+                      setBreakProbability(0);
+                      addLog('info', 'Switched to Fast Mode (1-2s delay, ~2,000/hr).');
+                    }}
+                    className={`p-3 rounded-xl border text-left transition flex flex-col gap-1 ${
+                      minDelay === 1 && maxDelay === 2
+                        ? 'bg-purple-500/15 border-purple-500/50 text-purple-300 shadow-md'
+                        : 'bg-gray-900 border-gray-800 text-gray-400 hover:border-gray-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 font-bold text-xs text-white">
+                      <span>🚀 Fast Mode</span>
+                    </div>
+                    <span className="text-[10px] text-gray-400">1s–2s delay • ~2,000 / hr</span>
+                  </button>
+                </div>
+              </div>
+
               <div>
                 <div className="flex justify-between text-xs font-semibold text-gray-300 mb-1.5">
                   <span>Action Delay Range</span>
                   <span className="text-pink-400 font-mono">
-                    {minDelay}s – {maxDelay}s per action
+                    {minDelay}s – {maxDelay}s per action (~{Math.round(3600 / (((minDelay + maxDelay) / 2) + 0.5))} unlikes/hr)
                   </span>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
@@ -1076,7 +1157,8 @@ export default function Dashboard() {
                     <label className="text-[11px] text-gray-400 block mb-1">Min Delay (seconds)</label>
                     <input
                       type="number"
-                      min={1}
+                      step="0.5"
+                      min={0.5}
                       max={60}
                       value={minDelay}
                       onChange={(e) => setMinDelay(Number(e.target.value))}
@@ -1087,6 +1169,7 @@ export default function Dashboard() {
                     <label className="text-[11px] text-gray-400 block mb-1">Max Delay (seconds)</label>
                     <input
                       type="number"
+                      step="0.5"
                       min={1}
                       max={120}
                       value={maxDelay}
