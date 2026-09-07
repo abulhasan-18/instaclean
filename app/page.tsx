@@ -41,8 +41,8 @@ export default function Dashboard() {
   const [accountStatus, setAccountStatus] = useState<'idle' | 'validating' | 'valid' | 'invalid'>('idle');
   const [accountStatusMsg, setAccountStatusMsg] = useState('');
 
-  // Safety & speed settings (Default: Turbo Mode with 10 parallel threads)
-  const [concurrency, setConcurrency] = useState(10);
+  // Safety & speed settings (Default: Turbo Mode with 12 parallel threads)
+  const [concurrency, setConcurrency] = useState(12);
   const [minDelay, setMinDelay] = useState(0.5);
   const [maxDelay, setMaxDelay] = useState(1);
   const [breakProbability, setBreakProbability] = useState(0); // 0% default (no pauses, continuous)
@@ -1143,22 +1143,22 @@ export default function Dashboard() {
                   <button
                     type="button"
                     onClick={() => {
-                      setConcurrency(10);
+                      setConcurrency(12);
                       setMinDelay(0.5);
                       setMaxDelay(1);
                       setBreakProbability(0);
-                      addLog('info', 'Switched to Turbo Multi-Thread Mode (10 parallel threads, 0.5-1s delay).');
+                      addLog('info', 'Switched to Turbo Multi-Thread Mode (12 parallel threads, 0.5-1s delay).');
                     }}
                     className={`p-3 rounded-xl border text-left transition flex flex-col gap-1 ${
-                      concurrency >= 10 && minDelay <= 1 && breakProbability === 0
+                      concurrency >= 12 && minDelay <= 1 && breakProbability === 0
                         ? 'bg-gradient-to-br from-pink-500/20 to-purple-500/20 border-pink-500 text-pink-300 shadow-md ring-1 ring-pink-500/40'
                         : 'bg-gray-900 border-gray-800 text-gray-400 hover:border-gray-700'
                     }`}
                   >
                     <div className="flex items-center gap-1.5 font-bold text-xs text-white">
-                      <span>⚡ Turbo Multi-Thread</span>
+                      <span>⚡ Turbo (12 Threads)</span>
                     </div>
-                    <span className="text-[10px] text-pink-400 font-semibold">10–12 threads • 0.5s–1s delay</span>
+                    <span className="text-[10px] text-pink-400 font-semibold">12 threads • ~17m per 10k</span>
                   </button>
 
                   <button
@@ -1240,7 +1240,7 @@ export default function Dashboard() {
                   <input
                     type="range"
                     min={1}
-                    max={15}
+                    max={30}
                     value={concurrency}
                     onChange={(e) => setConcurrency(Number(e.target.value))}
                     className="w-full accent-pink-500 cursor-pointer"
@@ -1248,14 +1248,14 @@ export default function Dashboard() {
                   <input
                     type="number"
                     min={1}
-                    max={20}
+                    max={30}
                     value={concurrency}
-                    onChange={(e) => setConcurrency(Math.max(1, Math.min(20, Number(e.target.value))))}
+                    onChange={(e) => setConcurrency(Math.max(1, Math.min(30, Number(e.target.value))))}
                     className="w-20 bg-gray-900 border border-gray-800 rounded-xl px-3 py-1.5 text-xs text-center text-gray-200 font-mono focus:outline-none focus:border-pink-500"
                   />
                 </div>
                 <p className="text-[11px] text-gray-500 mt-1.5">
-                  Fires {concurrency} unlikes simultaneously using asynchronous worker threads. Setting 10–12 threads runs parallel batches for maximum speed.
+                  Fires {concurrency} unlikes simultaneously using asynchronous worker threads. Setting 12 threads completes ~10k posts in ~17 minutes.
                 </p>
               </div>
 
