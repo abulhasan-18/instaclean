@@ -44,9 +44,17 @@ export async function autoFetchCsrfToken(sessionId: string): Promise<string> {
       },
       redirect: 'manual',
     });
-    const setCookie = res.headers.get('set-cookie') || '';
-    const match = setCookie.match(/csrftoken=([^;]+)/);
-    if (match) return match[1];
+    let cookies: string[] = [];
+    if (typeof (res.headers as any).getSetCookie === 'function') {
+      cookies = (res.headers as any).getSetCookie();
+    } else {
+      const single = res.headers.get('set-cookie');
+      if (single) cookies = [single];
+    }
+    for (const c of cookies) {
+      const match = c.match(/csrftoken=([^;]+)/);
+      if (match) return match[1];
+    }
   } catch {
     // fallback
   }
@@ -63,10 +71,18 @@ export async function instagramApiRequest(
     sessionId: string;
     csrfToken?: string;
     dsUserId?: string;
+    userAgent?: string;
     body?: Record<string, string>;
   }
 ) {
-  let { method = 'GET', sessionId, csrfToken = '', dsUserId = '', body } = options;
+  let {
+    method = 'GET',
+    sessionId,
+    csrfToken = '',
+    dsUserId = '',
+    userAgent,
+    body,
+  } = options;
 
   if (!csrfToken) {
     csrfToken = await autoFetchCsrfToken(sessionId);
@@ -85,6 +101,7 @@ export async function instagramApiRequest(
 
   const headers: Record<string, string> = {
     'User-Agent':
+      userAgent ||
       'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
     'X-IG-App-ID': '936619743392459',
     'X-ASBD-ID': '129477',
@@ -93,6 +110,10 @@ export async function instagramApiRequest(
     'Accept': '*/*',
     'Accept-Language': 'en-US,en;q=0.9',
     Referer: 'https://www.instagram.com/',
+    Origin: 'https://www.instagram.com',
+    'Sec-Fetch-Dest': 'empty',
+    'Sec-Fetch-Mode': 'cors',
+    'Sec-Fetch-Site': 'same-origin',
     Cookie: cookieParts.join('; '),
   };
 

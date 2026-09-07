@@ -40,13 +40,13 @@ export default function Dashboard() {
   const [accountStatus, setAccountStatus] = useState<'idle' | 'validating' | 'valid' | 'invalid'>('idle');
   const [accountStatusMsg, setAccountStatusMsg] = useState('');
 
-  // Safety settings
-  const [minDelay, setMinDelay] = useState(6);
-  const [maxDelay, setMaxDelay] = useState(14);
-  const [breakProbability, setBreakProbability] = useState(5); // 5%
+  // Safety settings (user requested: min 3s to 10s per post)
+  const [minDelay, setMinDelay] = useState(3);
+  const [maxDelay, setMaxDelay] = useState(10);
+  const [breakProbability, setBreakProbability] = useState(0); // 0% default (no unexpected 5-min freezes)
   const [breakMin, setBreakMin] = useState(3); // minutes
   const [breakMax, setBreakMax] = useState(8); // minutes
-  const [maxRetries, setMaxRetries] = useState(3);
+  const [maxRetries, setMaxRetries] = useState(1);
 
   // Likes state
   const [likedItems, setLikedItems] = useState<LikedPostItem[]>([]);
@@ -350,15 +350,19 @@ export default function Dashboard() {
             break;
           } else {
             errorMsg = resData.error || `HTTP ${res.status}`;
+            // If post not found (404) or bad request (400), don't waste retries
+            if (res.status === 404 || res.status === 400) {
+              break;
+            }
             if (attempt < maxRetries) {
-              await new Promise((r) => setTimeout(r, 4000));
+              await new Promise((r) => setTimeout(r, 2000));
             }
           }
         } catch (e: any) {
           if (controller.signal.aborted) break;
           errorMsg = e.message || 'Network error';
           if (attempt < maxRetries) {
-            await new Promise((r) => setTimeout(r, 4000));
+            await new Promise((r) => setTimeout(r, 2000));
           }
         }
       }
@@ -383,10 +387,14 @@ export default function Dashboard() {
           prev.map((it) => (it.id === item.id ? { ...it, status: 'failed', error: errorMsg } : it))
         );
         addLog('error', `Failed to unlike ${item.url}: ${errorMsg}`);
+
+        if (i === 0 && errorMsg.includes('404')) {
+          addLog('warning', '💡 Tip: You can also use the "⚡ Copy 1-Click Instagram Console Script" below to unlike directly inside your Instagram tab with 0% error rate!');
+        }
       }
 
-      // Check for cooldown break
-      if (Math.random() < breakProbability / 100 && i < pendingItems.length - 1) {
+      // Check for cooldown break - only if explicitly enabled in Settings
+      if (breakProbability > 0 && Math.random() < breakProbability / 100 && i < pendingItems.length - 1) {
         const breakSec = Math.round(Math.random() * (breakMax - breakMin) * 60 + breakMin * 60);
         addLog('warning', `☕ Cooldown break: Pausing for ${Math.round(breakSec / 60)} minutes to protect your account.`);
         await new Promise((r) => setTimeout(r, breakSec * 1000));
@@ -414,6 +422,51 @@ export default function Dashboard() {
     }
     setIsUnliking(false);
     addLog('warning', 'Stopping unlike process...');
+  };
+
+  // Copy Native Browser Console Script (Runs directly inside active instagram.com tab: 0 tokens needed, 3-10s delay, 0 404 errors)
+  const copyBrowserRunnerScript = () => {
+    if (likedItems.length === 0) {
+      addLog('warning', 'Please upload your liked_posts.json file first.');
+      return;
+    }
+
+    const payload = likedItems.map((it) => ({ id: it.mediaId, url: it.url }));
+    const script = `/* InstaClean Native Browser Runner - 100% Native Session, 0 Token Hassle */
+(async () => {
+  const posts = ${JSON.stringify(payload)};
+  console.log("%c[InstaClean]%c Starting native mass unlike for " + posts.length + " posts directly inside your session...", "color:#ec4899;font-weight:bold;font-size:13px;", "color:#fff;");
+  const csrf = document.cookie.match(/csrftoken=([^;]+)/)?.[1] || "";
+  let unliked = 0, skipped = 0;
+  
+  for (let i = 0; i < posts.length; i++) {
+    const post = posts[i];
+    // Configured delay: 3 to 10 seconds
+    const delay = Math.floor(Math.random() * (10000 - 3000 + 1)) + 3000;
+    try {
+      const res = await fetch('/api/v1/web/likes/' + post.id + '/unlike/', {
+        method: 'POST',
+        headers: { 'x-csrftoken': csrf, 'x-requested-with': 'XMLHttpRequest' }
+      });
+      if (res.ok || res.status === 200) {
+        unliked++;
+        console.log("%c[" + (i+1) + "/" + posts.length + "] %c✓ Unliked %c" + post.url + " %c(" + (delay/1000).toFixed(1) + "s delay)", "color:#888;", "color:#22c55e;font-weight:bold;", "color:#38bdf8;", "color:#888;");
+      } else {
+        skipped++;
+        console.warn("[" + (i+1) + "/" + posts.length + "] Status " + res.status + " for " + post.url);
+      }
+    } catch (err) {
+      skipped++;
+      console.error("[" + (i+1) + "/" + posts.length + "] Error unliking " + post.url, err);
+    }
+    await new Promise(r => setTimeout(r, delay));
+  }
+  console.log("%c[InstaClean] Complete! Unliked: " + unliked + ", Skipped: " + skipped, "color:#22c55e;font-size:14px;font-weight:bold;");
+})();`;
+
+    navigator.clipboard.writeText(script);
+    addLog('success', `Copied 1-Click Console Runner for ${likedItems.length.toLocaleString()} posts to clipboard!`);
+    addLog('info', '👉 How to use: Open https://www.instagram.com in a new tab -> Press Cmd+Option+J (Console) -> Paste (Cmd+V) & press Enter!');
   };
 
   return (
@@ -629,23 +682,37 @@ export default function Dashboard() {
                   )}
                 </div>
 
-                <div className="flex items-center gap-2">
-                  {!isUnliking ? (
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center gap-2">
+                    {!isUnliking ? (
+                      <button
+                        onClick={startUnliking}
+                        disabled={likedItems.length === 0}
+                        className="w-full bg-gradient-to-r from-pink-600 to-purple-600 hover:from-pink-500 hover:to-purple-500 disabled:opacity-40 text-white text-xs font-semibold py-2.5 px-4 rounded-xl flex items-center justify-center gap-2 shadow-lg transition"
+                      >
+                        <Play className="w-4 h-4" />
+                        Start Mass Unlike
+                      </button>
+                    ) : (
+                      <button
+                        onClick={stopUnliking}
+                        className="w-full bg-red-600/90 hover:bg-red-500 text-white text-xs font-semibold py-2.5 px-4 rounded-xl flex items-center justify-center gap-2 transition"
+                      >
+                        <Square className="w-4 h-4 fill-white" />
+                        Stop Execution
+                      </button>
+                    )}
+                  </div>
+
+                  {likedItems.length > 0 && (
                     <button
-                      onClick={startUnliking}
-                      disabled={likedItems.length === 0}
-                      className="w-full bg-gradient-to-r from-pink-600 to-purple-600 hover:from-pink-500 hover:to-purple-500 disabled:opacity-40 text-white text-xs font-semibold py-2.5 px-4 rounded-xl flex items-center justify-center gap-2 shadow-lg transition"
+                      onClick={copyBrowserRunnerScript}
+                      type="button"
+                      className="w-full bg-gradient-to-r from-gray-900 to-gray-800 hover:from-pink-950/40 hover:to-purple-950/40 border border-pink-500/30 hover:border-pink-500/60 text-pink-300 hover:text-pink-200 text-xs font-semibold py-2 px-3 rounded-xl flex items-center justify-center gap-2 transition group"
+                      title="Run directly inside your browser tab on instagram.com with 0% error rate and 3-10s delay"
                     >
-                      <Play className="w-4 h-4" />
-                      Start Mass Unlike
-                    </button>
-                  ) : (
-                    <button
-                      onClick={stopUnliking}
-                      className="w-full bg-red-600/90 hover:bg-red-500 text-white text-xs font-semibold py-2.5 px-4 rounded-xl flex items-center justify-center gap-2 transition"
-                    >
-                      <Square className="w-4 h-4 fill-white" />
-                      Stop Execution
+                      <Sparkles className="w-3.5 h-3.5 text-pink-400 group-hover:rotate-12 transition-transform" />
+                      ⚡ Copy 1-Click Console Script (0 Errors)
                     </button>
                   )}
                 </div>

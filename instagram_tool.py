@@ -26,13 +26,13 @@ import urllib.error
 CONFIG_FILE = "config.json"
 DEFAULT_CONFIG = {
     "delay": {
-        "min": 5,
-        "max": 15
+        "min": 3,
+        "max": 10
     },
     "break": {
-        "min": 300,        # 5 minutes
-        "max": 900,        # 15 minutes
-        "probability": 0.05 # 5% chance of pause
+        "min": 180,        # 3 minutes
+        "max": 480,        # 8 minutes
+        "probability": 0.0 # 0% default (no unexpected long pauses)
     },
     "accounts": {},
     "log_level": "INFO",

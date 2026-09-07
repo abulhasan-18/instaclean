@@ -22,15 +22,35 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const res = await instagramApiRequest(`/api/v1/web/likes/${mediaId}/unlike/`, {
+    const userAgent = req.headers.get('user-agent') || undefined;
+    let res = await instagramApiRequest(`/api/v1/web/likes/${mediaId}/unlike/`, {
       method: 'POST',
       sessionId,
       csrfToken,
       dsUserId,
+      userAgent,
       body: {},
     });
 
-    if (res.status === 200 && res.data?.status === 'ok') {
+    // If web endpoint 404s, try fallback media endpoint
+    if (res.status === 404 || res.status === 500) {
+      const fallback = await instagramApiRequest(`/api/v1/media/${mediaId}/unlike/`, {
+        method: 'POST',
+        sessionId,
+        csrfToken,
+        dsUserId,
+        userAgent,
+        body: {
+          media_id: mediaId,
+          _uid: dsUserId || sessionId.split(/%3A|:/)[0] || '',
+        },
+      });
+      if (fallback.status === 200) {
+        res = fallback;
+      }
+    }
+
+    if (res.status === 200 && (res.data?.status === 'ok' || !res.data?.status)) {
       return NextResponse.json({ ok: true, status: 'ok' });
     }
 
