@@ -16,7 +16,8 @@ import {
   RefreshCw,
   Sparkles,
   Info,
-  Trash2
+  Trash2,
+  Loader2
 } from 'lucide-react';
 import { LikedPostItem, instagramCodeToMediaId } from '@/lib/instagram';
 
@@ -50,6 +51,7 @@ export default function Dashboard() {
   // Likes state
   const [likedItems, setLikedItems] = useState<LikedPostItem[]>([]);
   const [likesFileName, setLikesFileName] = useState('');
+  const [isParsingLikes, setIsParsingLikes] = useState(false);
   const [isUnliking, setIsUnliking] = useState(false);
   const [unlikeProgress, setUnlikeProgress] = useState({ current: 0, total: 0, success: 0, errors: 0 });
   const [currentUnlikingUrl, setCurrentUnlikingUrl] = useState('');
@@ -162,10 +164,13 @@ export default function Dashboard() {
     const file = e.target.files?.[0];
     if (!file) return;
     setLikesFileName(file.name);
-    addLog('info', `Reading file: ${file.name}...`);
+    setIsParsingLikes(true);
+    const sizeMb = (file.size / (1024 * 1024)).toFixed(1);
+    addLog('info', `Reading file: ${file.name} (${sizeMb} MB)...`);
 
     const reader = new FileReader();
     reader.onerror = () => {
+      setIsParsingLikes(false);
       addLog('error', `Failed to read file: ${file.name}`);
     };
     reader.onload = (event) => {
@@ -175,6 +180,7 @@ export default function Dashboard() {
         try {
           parsed = JSON.parse(text);
         } catch (jsonErr: any) {
+          setIsParsingLikes(false);
           addLog('error', `Invalid JSON file format: ${jsonErr.message}`);
           return;
         }
@@ -196,6 +202,7 @@ export default function Dashboard() {
         }
 
         if (rawLikes.length === 0) {
+          setIsParsingLikes(false);
           addLog('warning', `No liked posts found in ${file.name}. Please ensure this is the liked_posts.json file.`);
           return;
         }
@@ -214,6 +221,9 @@ export default function Dashboard() {
             timestamp = it.timestamp;
           } else if (typeof it.url === 'string') {
             href = it.url;
+            timestamp = it.timestamp;
+          } else if (typeof it.link === 'string') {
+            href = it.link;
             timestamp = it.timestamp;
           }
 
@@ -244,14 +254,17 @@ export default function Dashboard() {
         }
 
         if (items.length === 0) {
+          setIsParsingLikes(false);
           addLog('warning', 'Found entries in the JSON file, but none contained valid Instagram post links.');
           return;
         }
 
         setLikedItems(items);
         setUnlikeProgress({ current: 0, total: items.length, success: 0, errors: 0 });
-        addLog('success', `Parsed ${items.length} liked posts from ${file.name}`);
+        setIsParsingLikes(false);
+        addLog('success', `Parsed ${items.length.toLocaleString()} liked posts from ${file.name}`);
       } catch (err: any) {
+        setIsParsingLikes(false);
         addLog('error', `Parsing error: ${err.message}`);
       }
     };
@@ -512,13 +525,37 @@ export default function Dashboard() {
                   </p>
                 </div>
 
-                <label className="cursor-pointer border-2 border-dashed border-gray-700 hover:border-pink-500/50 rounded-xl p-6 text-center transition bg-[#090b10] hover:bg-gray-900/40">
-                  <HeartCrack className="w-8 h-8 mx-auto mb-2 text-gray-500" />
-                  <span className="text-sm font-medium text-gray-300 block">
-                    Click to select or drag & drop <span className="text-pink-400">liked_posts.json</span>
-                  </span>
-                  <span className="text-xs text-gray-500 mt-1 block">Supports official Meta JSON export</span>
-                  <input type="file" accept=".json" onChange={handleLikesFileUpload} className="hidden" />
+                <label className={`border-2 border-dashed rounded-xl p-6 text-center transition bg-[#090b10] block ${
+                  isParsingLikes 
+                    ? 'border-pink-500/50 bg-pink-950/10 cursor-wait' 
+                    : 'cursor-pointer border-gray-700 hover:border-pink-500/50 hover:bg-gray-900/40'
+                }`}>
+                  {isParsingLikes ? (
+                    <div className="flex flex-col items-center">
+                      <Loader2 className="w-8 h-8 mx-auto mb-2 text-pink-400 animate-spin" />
+                      <span className="text-sm font-medium text-pink-300 block">
+                        Reading & parsing in browser memory...
+                      </span>
+                      <span className="text-xs text-gray-500 mt-1 block">
+                        Large files (100+ MB) may take 2-4 seconds. No data leaves your machine.
+                      </span>
+                    </div>
+                  ) : (
+                    <>
+                      <HeartCrack className="w-8 h-8 mx-auto mb-2 text-gray-500" />
+                      <span className="text-sm font-medium text-gray-300 block">
+                        Click to select or drag & drop <span className="text-pink-400">liked_posts.json</span>
+                      </span>
+                      <span className="text-xs text-gray-500 mt-1 block">Supports official Meta JSON export (even 100+ MB)</span>
+                    </>
+                  )}
+                  <input
+                    type="file"
+                    accept=".json"
+                    onChange={handleLikesFileUpload}
+                    disabled={isParsingLikes}
+                    className="hidden"
+                  />
                 </label>
               </div>
 
@@ -630,7 +667,7 @@ export default function Dashboard() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-800/60 font-mono text-[11px]">
-                      {likedItems.map((item, idx) => (
+                      {likedItems.slice(0, 100).map((item, idx) => (
                         <tr key={item.id} className="hover:bg-gray-900/40 transition">
                           <td className="py-2 px-4 text-gray-500">{idx + 1}</td>
                           <td className="py-2 px-4 text-gray-300 max-w-xs truncate">
@@ -672,6 +709,12 @@ export default function Dashboard() {
                   </table>
                 )}
               </div>
+
+              {likedItems.length > 100 && (
+                <div className="py-2.5 px-4 bg-gray-900/40 border-t border-gray-800 text-center text-xs text-gray-400">
+                  Showing first 100 of <span className="font-semibold text-pink-400">{likedItems.length.toLocaleString()}</span> posts for performance (all will be unliked sequentially).
+                </div>
+              )}
             </div>
           </div>
         )}
