@@ -72,24 +72,31 @@ export async function POST(req: NextRequest) {
       csrfToken = cookieCsrfMatch[1];
     }
 
-    // If home page returned 200 or html contains "logged-in", session is confirmed!
-    if (homeRes.status === 200 || html.includes('logged-in')) {
+    // A valid logged-in Instagram session contains viewer info and does not have "viewer":null
+    const isLoggedOut =
+      html.includes('"viewer":null') ||
+      html.includes('loginAndSignupPage') ||
+      location.includes('/accounts/login/') ||
+      !username;
+
+    if (username && !isLoggedOut) {
       return NextResponse.json({
         ok: true,
-        username: username || dsUserId,
+        username,
         csrfToken,
         dsUserId,
         sessionId,
-        message: username ? `Connected as @${username}` : 'Instagram session is valid and active!',
+        message: `Connected as @${username}`,
       });
     }
 
     return NextResponse.json(
       {
         ok: false,
-        message: `Instagram returned status ${homeRes.status}. Check your session tokens.`,
+        message:
+          'Instagram session is expired or invalid. Please copy fresh cookies from an active Instagram browser tab.',
       },
-      { status: 400 }
+      { status: 401 }
     );
   } catch (err: any) {
     console.error('[Auth Validate] Exception:', err);

@@ -57,7 +57,8 @@ export async function POST(req: NextRequest) {
       if (!href) continue;
 
       const match = href.match(/\/(?:p|reel|tv)\/([A-Za-z0-9_-]+)/);
-      const shortcode = match ? match[1] : '';
+      const rawCode = match ? match[1] : '';
+      const shortcode = rawCode.length > 11 ? rawCode.slice(0, 11) : rawCode;
       let mediaId = shortcode ? instagramCodeToMediaId(shortcode) : '';
       if (!mediaId && item.fbid) mediaId = String(item.fbid);
 

@@ -20,7 +20,11 @@ export interface LikedPostItem {
  */
 export function instagramCodeToMediaId(urlOrCode: string): string {
   const match = urlOrCode.match(/\/(?:p|reel|tv)\/([A-Za-z0-9_-]+)/);
-  const code = match ? match[1] : urlOrCode.trim().replace(/^\/+|\/+$/g, '');
+  let code = match ? match[1] : urlOrCode.trim().replace(/^\/+|\/+$/g, '');
+  // Strip tracking parameters attached to shortcodes in export files
+  if (code.length > 11) {
+    code = code.slice(0, 11);
+  }
   const charmap = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
   let id = BigInt(0);
   for (let i = 0; i < code.length; i++) {
@@ -208,7 +212,18 @@ export async function instagramGraphQLUnlike(options: InstagramUnlikeOptions) {
     method: 'POST',
     headers,
     body: reqBody,
+    redirect: 'manual',
   });
+
+  if (res.status === 302 || res.status === 401) {
+    return {
+      status: res.status,
+      ok: false,
+      data: {
+        message: 'Instagram session expired (HTTP ' + res.status + ' redirect to login). Please copy fresh cookies from instagram.com',
+      },
+    };
+  }
 
   const contentType = res.headers.get('content-type') || '';
   let data: any = {};
