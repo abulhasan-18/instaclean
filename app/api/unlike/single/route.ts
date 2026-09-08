@@ -52,10 +52,21 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    if (gqlRes.status === 302 || gqlRes.status === 401) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: 'Instagram session expired (HTTP ' + gqlRes.status + '). Please copy fresh cookies in Account tab.',
+          details: gqlRes.data,
+        },
+        { status: 401 }
+      );
+    }
+
     // If GraphQL returned an error, check message
     const gqlErrorMsg =
-      gqlRes.data?.errors?.[0]?.message ||
       gqlRes.data?.message ||
+      gqlRes.data?.errors?.[0]?.message ||
       (gqlRes.status !== 200 ? `GraphQL HTTP ${gqlRes.status}` : null);
 
     // 2. Fallback to Legacy REST API only if GraphQL returned non-200 or unexpected structure
