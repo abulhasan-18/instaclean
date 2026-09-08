@@ -132,6 +132,26 @@ export default function Dashboard() {
     }
   };
 
+  // Clear all cached credentials, tokens & local storage
+  const handleClearCache = () => {
+    try {
+      localStorage.removeItem('insta_cookie_header');
+      localStorage.removeItem('insta_sid');
+      localStorage.removeItem('insta_csrf');
+      localStorage.removeItem('insta_uid');
+      localStorage.removeItem('insta_settings');
+    } catch {
+      // ignore
+    }
+    setCookieHeader('');
+    setSessionId('');
+    setCsrfToken('');
+    setDsUserId('');
+    setAccountStatus('idle');
+    setAccountStatusMsg('');
+    addLog('info', '🧹 Cache and saved Instagram session cleared successfully.');
+  };
+
   // Test account validation
   const validateAccount = async () => {
     if (!cookieHeader && !sessionId) {
@@ -604,7 +624,7 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <div className="flex items-center space-x-4">
+          <div className="flex items-center space-x-3">
             {/* Account Status Pill */}
             <div
               onClick={() => setActiveTab('account')}
@@ -627,6 +647,17 @@ export default function Dashboard() {
                 </>
               )}
             </div>
+
+            {/* Clear Cache Button */}
+            <button
+              type="button"
+              onClick={handleClearCache}
+              title="Clear stored session cookies and local cache"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border border-gray-800 bg-gray-900/60 text-gray-400 hover:text-red-400 hover:border-red-500/40 hover:bg-red-500/10 transition"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Clear Cache</span>
+            </button>
           </div>
         </div>
       </header>
@@ -1049,7 +1080,7 @@ export default function Dashboard() {
                   </div>
                 )}
 
-                <div className="flex gap-3 pt-2">
+                <div className="flex gap-2.5 pt-2">
                   <button
                     onClick={validateAccount}
                     disabled={accountStatus === 'validating'}
@@ -1064,9 +1095,18 @@ export default function Dashboard() {
                   </button>
                   <button
                     onClick={handleSaveCredentials}
-                    className="bg-gray-800 hover:bg-gray-700 text-gray-200 text-xs font-semibold py-2.5 px-4 rounded-xl transition"
+                    className="bg-gray-800 hover:bg-gray-700 text-gray-200 text-xs font-semibold py-2.5 px-3.5 rounded-xl transition"
                   >
                     Save Locally
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleClearCache}
+                    title="Clear cached cookies & reset form"
+                    className="bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 text-xs font-semibold py-2.5 px-3.5 rounded-xl flex items-center gap-1.5 transition"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Clear Cache</span>
                   </button>
                 </div>
               </div>
@@ -1351,22 +1391,32 @@ export default function Dashboard() {
                 />
               </div>
 
-              <button
-                onClick={() => {
-                  try {
-                    localStorage.setItem(
-                      'insta_settings',
-                      JSON.stringify({ minDelay, maxDelay, breakProbability, breakMin, breakMax, maxRetries })
-                    );
-                    addLog('success', 'Settings saved.');
-                  } catch {
-                    // ignore
-                  }
-                }}
-                className="bg-gray-800 hover:bg-gray-700 text-white text-xs font-semibold py-2.5 px-6 rounded-xl transition"
-              >
-                Save Settings
-              </button>
+                <div className="flex items-center gap-3 pt-2">
+                  <button
+                    onClick={() => {
+                      try {
+                        localStorage.setItem(
+                          'insta_settings',
+                          JSON.stringify({ minDelay, maxDelay, breakProbability, breakMin, breakMax, maxRetries, concurrency })
+                        );
+                        addLog('success', 'Settings saved.');
+                      } catch {
+                        // ignore
+                      }
+                    }}
+                    className="bg-gray-800 hover:bg-gray-700 text-white text-xs font-semibold py-2.5 px-6 rounded-xl transition"
+                  >
+                    Save Settings
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleClearCache}
+                    className="bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 text-xs font-semibold py-2.5 px-4 rounded-xl flex items-center gap-1.5 transition"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Clear All Cache</span>
+                  </button>
+                </div>
             </div>
           </div>
         )}
